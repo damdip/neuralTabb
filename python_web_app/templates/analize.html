@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block title %}Analisi Dati{% endblock %}
+{% block content %}
+  <h1>Risultati analisi</h1>
+  <p>Timestamp: {{ analysis.timestamp }}</p>
+
+  <h3>Statistiche</h3>
+  <pre>{{ analysis.stats | tojson(indent=2) }}</pre>
+
+  <h3>Cluster</h3>
+  <pre>{{ analysis.clusters | tojson(indent=2) }}</pre>
+
+  <h3>Topics</h3>
+  <pre>{{ analysis.topics | tojson(indent=2) }}</pre>
+{% endblock %}

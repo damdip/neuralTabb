@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+{% block title %}Collezioni{% endblock %}
+{% block content %}
+  <h1>Collezioni</h1>
+
+  <table class="table table-striped">
+    <thead>
+      <tr><th>Nome</th><th>Count</th><th>Properties</th><th>Vectorizer</th></tr>
+    </thead>
+    <tbody>
+      {% for c in collections %}
+        <tr>
+          <td>{{ c.name }}</td>
+          <td>{{ c.count }}</td>
+          <td>{{ c.properties }}</td>
+          <td>{{ c.vectorizer }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <hr>
+  <h4>Crea nuova collezione</h4>
+  <form method="post" action="{{ url_for('create_collection') }}">
+    <div class="mb-3">
+      <label class="form-label">Nome</label>
+      <input class="form-control" name="name">
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Properties (JSON list)</label>
+      <textarea class="form-control" name="properties">[]</textarea>
+    </div>
+    <button class="btn btn-primary" type="submit">Crea</button>
+  </form>
+{% endblock %}

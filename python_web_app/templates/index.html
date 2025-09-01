@@ -1,0 +1,306 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Weaviate Operations{% endblock %}
+
+{% block content %}
+
+<!-- Schermata di Benvenuto - Nessuna collezione -->
+{% if show_welcome %}
+<div class="text-center py-5">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-lg-8">
+                <i class="fas fa-database fa-4x text-primary mb-4"></i>
+                <h1 class="display-4 mb-3">Benvenuto in NeuralTab</h1>
+                <p class="lead mb-4">Non hai ancora creato alcuna collezione. Inizia configurando il tuo primo database vettoriale.</p>
+                
+                <div class="row mt-5">
+                    <div class="col-md-6 mb-4">
+                        <div class="card h-100 border-primary">
+                            <div class="card-body text-center">
+                                <i class="fas fa-plus-circle fa-3x text-primary mb-3"></i>
+                                <h5 class="card-title">Crea Collezione</h5>
+                                <p class="card-text">Crea una nuova collezione per organizzare i tuoi documenti</p>
+                                <a href="{{ url_for('manage_collections') }}" class="btn btn-primary">
+                                    <i class="fas fa-plus"></i> Crea Collezione
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <div class="card h-100 border-success">
+                            <div class="card-body text-center">
+                                <i class="fas fa-upload fa-3x text-success mb-3"></i>
+                                <h5 class="card-title">Carica Documenti</h5>
+                                <p class="card-text">Carica i tuoi primi documenti nella collezione predefinita</p>
+                                <a href="{{ url_for('upload_documents') }}" class="btn btn-success">
+                                    <i class="fas fa-upload"></i> Carica Dati
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mt-4">
+                    <small class="text-muted">
+                        <i class="fas fa-info-circle"></i> 
+                        Suggerimento: Inizia caricando alcuni documenti per vedere le funzionalità in azione
+                    </small>
+                    
+                    <small class="text-muted">
+                        <i class="fas fa-info-circle"></i> 
+                        Powered by Weaviate, un database vettoriale open-source
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Schermata Collezioni Vuote -->
+{% elif show_empty_collections %}
+<div class="text-center py-4">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-lg-8">
+                <i class="fas fa-folder-open fa-3x text-warning mb-4"></i>
+                <h1 class="h2 mb-3">Collezioni Create ma Vuote</h1>
+                <p class="lead mb-4">Hai {{ collections|length }} collezione/i create ma nessun documento caricato.</p>
+                
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <div class="card border-info">
+                            <div class="card-body text-center">
+                                <i class="fas fa-upload fa-2x text-info mb-2"></i>
+                                <h6>Carica Documenti</h6>
+                                <a href="{{ url_for('upload_documents') }}" class="btn btn-info btn-sm">
+                                    Carica Ora
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <div class="card border-success">
+                            <div class="card-body text-center">
+                                <i class="fas fa-puzzle-piece fa-2x text-success mb-2"></i>
+                                <h6>Integra Dati</h6>
+                                <a href="{{ url_for('integrate_data') }}" class="btn btn-success btn-sm">
+                                    Integra
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <div class="card border-secondary">
+                            <div class="card-body text-center">
+                                <i class="fas fa-cog fa-2x text-secondary mb-2"></i>
+                                <h6>Gestisci Collezioni</h6>
+                                <a href="{{ url_for('manage_collections') }}" class="btn btn-secondary btn-sm">
+                                    Gestisci
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Lista collezioni esistenti -->
+                <div class="mt-4">
+                    <h5>Collezioni Disponibili:</h5>
+                    <div class="row">
+                        {% for collection in collections %}
+                        <div class="col-md-6 col-lg-4 mb-2">
+                            <div class="card border-light">
+                                <div class="card-body py-2">
+                                    <h6 class="card-title mb-1">{{ collection.name }}</h6>
+                                    <small class="text-muted">{{ collection.count }} documenti</small>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Dashboard Completa - Con dati -->
+{% elif show_dashboard %}
+<div class="row">
+    <div class="col-12">
+        <h1><i class="fas fa-tachometer-alt"></i> Dashboard</h1>
+        <p class="lead">Panoramica delle operazioni Weaviate</p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body text-center">
+                <i class="fas fa-file-alt fa-2x text-primary"></i>
+                <h3 class="mt-2">{{ stats.total_documents or 0 }}</h3>
+                <p class="card-text">Documenti Totali</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body text-center">
+                <i class="fas fa-tags fa-2x text-success"></i>
+                <h3 class="mt-2">{{ stats.categories|length if stats.categories else 0 }}</h3>
+                <p class="card-text">Categorie</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body text-center">
+                <i class="fas fa-source fa-2x text-info"></i>
+                <h3 class="mt-2">{{ stats.sources|length if stats.sources else 0 }}</h3>
+                <p class="card-text">Sorgenti</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body text-center">
+                <i class="fas fa-chart-line fa-2x text-warning"></i>
+                <h3 class="mt-2">{{ "%.0f"|format(stats.content_stats.avg_length) if stats.content_stats else 0 }}</h3>
+                <p class="card-text">Lunghezza Media</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-layer-group"></i> Operazioni Disponibili</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <a href="{{ url_for('question_answering') }}" class="btn btn-primary">
+                        <i class="fas fa-question-circle"></i> Q&A System
+                    </a>
+                    <a href="{{ url_for('analyze_data') }}" class="btn btn-success">
+                        <i class="fas fa-chart-bar"></i> Analisi Dati
+                    </a>
+                    <a href="{{ url_for('clean_data') }}" class="btn btn-warning">
+                        <i class="fas fa-broom"></i> Pulizia Dati
+                    </a>
+                    <a href="{{ url_for('extract_knowledge') }}" class="btn btn-info">
+                        <i class="fas fa-lightbulb"></i> Estrazione Conoscenza
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-info-circle"></i> Sistema Status</h5>
+            </div>
+            <div class="card-body">
+                <p><i class="fas fa-check-circle text-success"></i> Weaviate Connesso</p>
+                <p><i class="fas fa-database text-success"></i> {{ collections|length }} Collezione/i Attive</p>
+                <p><i class="fas fa-upload text-success"></i> Upload Disponibile</p>
+                
+                <!-- Collezioni più popolate -->
+                {% if collections %}
+                <hr>
+                <h6>Collezioni:</h6>
+                {% for collection in collections[:3] %}
+                <div class="d-flex justify-content-between">
+                    <span>{{ collection.name }}</span>
+                    <span class="badge bg-primary">{{ collection.count }}</span>
+                </div>
+                {% endfor %}
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card border-0 bg-light">
+            <div class="card-body">
+                <h6 class="card-title"><i class="fas fa-rocket"></i> Azioni Rapide</h6>
+                <div class="row">
+                    <div class="col-md-3">
+                        <a href="{{ url_for('upload_documents') }}" class="btn btn-outline-primary btn-sm w-100">
+                            <i class="fas fa-plus"></i> Aggiungi Documenti
+                        </a>
+                    </div>
+                    <div class="col-md-3">
+                        <a href="{{ url_for('question_answering') }}" class="btn btn-outline-success btn-sm w-100">
+                            <i class="fas fa-search"></i> Cerca/Chiedi
+                        </a>
+                    </div>
+                    <div class="col-md-3">
+                        <a href="{{ url_for('analyze_data') }}" class="btn btn-outline-info btn-sm w-100">
+                            <i class="fas fa-chart-pie"></i> Analizza
+                        </a>
+                    </div>
+                    <div class="col-md-3">
+                        <a href="{{ url_for('manage_collections') }}" class="btn btn-outline-secondary btn-sm w-100">
+                            <i class="fas fa-cogs"></i> Gestisci
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Fallback: Mostra statistiche di base se disponibili -->
+{% else %}
+<div class="row">
+    <div class="col-12">
+        <h1><i class="fas fa-tachometer-alt"></i> Dashboard</h1>
+        {% if stats and stats.error %}
+            <div class="alert alert-danger">Errore: {{ stats.error }}</div>
+        {% elif stats %}
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <h5 class="card-title">Documenti totali</h5>
+                            <p class="card-text">{{ stats.total_documents or 0 }}</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <h5 class="card-title">Esempi analizzati</h5>
+                            <p class="card-text">{{ stats.analyzed_sample or 0 }}</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <h5 class="card-title">Lunghezza media contenuti</h5>
+                            <p class="card-text">{{ "%.0f"|format(stats.content_stats.avg_length) if stats.content_stats else 0 }}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {% if stats.categories %}
+            <h3>Top categorie</h3>
+            <ul>
+                {% for k,v in stats.categories.items() %}
+                    <li>{{ k }} — {{ v }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

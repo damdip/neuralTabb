@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block title %}Estrazione Conoscenza{% endblock %}
+{% block content %}
+  <h1>Estrazione</h1>
+
+  <h3>Entità (sample)</h3>
+  <pre>{{ extraction.entities | tojson(indent=2) }}</pre>
+
+  <h3>Relazioni (sample)</h3>
+  <pre>{{ extraction.relations | tojson(indent=2) }}</pre>
+
+  <h3>Topics</h3>
+  <pre>{{ extraction.topics | tojson(indent=2) }}</pre>
+
+  <h3>Keywords</h3>
+  <pre>{{ extraction.keywords | tojson(indent=2) }}</pre>
+{% endblock %}
