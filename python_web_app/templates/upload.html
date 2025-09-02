@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1><i class="fas fa-upload"></i> Upload Documenti</h1>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5>Carica File</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="file" class="form-label">Seleziona File (CSV, Excel, JSON, TXT)</label>
+                        <input type="file" class="form-control" id="file" name="file" accept=".csv,.xlsx,.xls,.json,.txt" required>
+                        <div class="form-text">
+                            <i class="fas fa-info-circle"></i> 
+                            Dimensione massima: <strong>1000MB</strong>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-upload"></i> Carica
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5>Formati Supportati</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-unstyled">
+                    <li><i class="fas fa-file-csv text-success"></i> <strong>(soon) CSV:</strong> Colonne title, content, category</li>
+                    <li><i class="fas fa-file-excel text-success"></i> <strong>Excel (.xlsx/.xls):</strong> Colonne title, content, category</li>
+                    <li><i class="fas fa-file-code text-info"></i> <strong>(soon) JSON:</strong> Array di oggetti</li>
+                    <li><i class="fas fa-file-alt text-secondary"></i> <strong>(soon) TXT:</strong> Testo semplice</li>
+                </ul>
+                
+                <hr>
+                
+                <h6><i class="fas fa-exclamation-triangle text-warning"></i> Limiti</h6>
+                <ul class="list-unstyled small">
+                    <li>• Max 1000MB per file</li>
+                    <li>• File di testo saranno divisi in chunks</li>
+                    <li>• CSV/Excel devono avere header</li>
+                    <li>• Excel supporta .xlsx e .xls</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                <h6>Esempi Formato</h6>
+            </div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <strong>CSV/Excel:</strong>
+                    <code style="font-size: 0.8em; display: block;">
+title,content,category<br>
+"Titolo 1","Contenuto...","tech"<br>
+"Titolo 2","Altro...","general"
+                    </code>
+                </div>
+                
+                <div class="mt-2">
+                    <strong>JSON:</strong>
+                    <code style="font-size: 0.8em; display: block;">
+[{<br>
+&nbsp;&nbsp;"title": "Titolo",<br>
+&nbsp;&nbsp;"content": "Contenuto...",<br>
+&nbsp;&nbsp;"category": "tech"<br>
+}]
+                    </code>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('file').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (file) {
+        const maxSize = 1000 * 1024 * 1024; // 1000MB
+        if (file.size > maxSize) {
+            alert(`File troppo grande! Dimensione: ${(file.size / (1024*1024)).toFixed(1)}MB. Massimo consentito: 1000MB`);
+            e.target.value = '';
+        }
+    }
+});
+</script>
+
+{% endblock %}

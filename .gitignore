@@ -1,5 +1,4 @@
 # Ambienti virtuali
 neuraltab/
 config/
-# Dataset (puoi personalizzare il nome o la cartella)
-
+dataset/

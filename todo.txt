@@ -1,0 +1,8 @@
+
+Books_data :
+    1) annotare il cleaning più generale e mantenerlo per l'applicazione
+
+
+
+
+Provare ad Integrare il tutto con l'applicazione web

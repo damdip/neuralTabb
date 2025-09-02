@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+{% block title %}Q&A{% endblock %}
+{% block content %}
+  <h1>Q&A</h1>
+  <form method="post" action="{{ url_for('question_answering') }}">
+    <div class="mb-3">
+      <label for="question" class="form-label">Domanda</label>
+      <input class="form-control" id="question" name="question" value="{{ question or '' }}">
+    </div>
+    <div class="mb-3">
+      <label for="collection" class="form-label">Collezione</label>
+      {% if collections and collections|length > 0 %}
+        <select class="form-select" id="collection" name="collection">
+          <option value="">Seleziona una collezione...</option>
+          {% for col in collections %}
+            <option value="{{ col.name }}" 
+                    {% if col.name == (collection or 'Documents') %}selected{% endif %}>
+              {{ col.name }} ({{ col.count }} documenti)
+            </option>
+          {% endfor %}
+        </select>
+        <div class="form-text">
+          Collezioni disponibili: {{ collections|length }}
+        </div>
+      {% else %}
+        <!-- Fallback se non ci sono collezioni -->
+        <input class="form-control" id="collection" name="collection" 
+               value="{{ collection or 'Documents' }}" 
+               placeholder="Nome collezione">
+        <div class="form-text text-warning">
+          ⚠️ Nessuna collezione trovata. Inserisci manualmente il nome.
+        </div>
+      {% endif %}
+    </div>
+    <button type="submit" class="btn btn-primary">Chiedi</button>
+  </form>
+
+  {% if answer %}
+    <hr>
+    <h4>Risposta</h4>
+    <p>{{ answer.answer }}</p>
+    <h5>Fonti</h5>
+    <ul>
+      {% for s in answer.sources %}
+        <li>{{ s.title }} — {{ s.source }} (relevance: {{ '%.2f'|format(1 - s.distance) if s.distance is defined else s.distance }})</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% endblock %}

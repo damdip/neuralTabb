@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}DocApp{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+      <div class="container-fluid">
+        <a class="navbar-brand" href="{{ url_for('index') }}">NeuralTab</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav" aria-controls="nav" aria-expanded="false">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="nav">
+          <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('upload_documents') }}">Upload</a></li>
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('question_answering') }}">Q&A</a></li>
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('analyze_data') }}">Analisi</a></li>
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('clean_data') }}">Pulizia</a></li>
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('integrate_data') }}">Integrazione</a></li>
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('extract_knowledge') }}">Estrai</a></li>
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('manage_collections') }}">Collezioni</a></li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <div class="container">
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          <div class="alert alert-info">
+            {% for msg in messages %}
+              <div>{{ msg }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  </body>
+</html>
