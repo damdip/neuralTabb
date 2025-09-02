@@ -46,5 +46,12 @@ except Exception as e:
     print(f"Errore durante l'inserimento degli elementi: {e}")
 finally:
     closeConnection(client)
+<<<<<<< Updated upstream
+=======
+
+
+
+    
+>>>>>>> Stashed changes
 
 

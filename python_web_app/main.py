@@ -397,3 +397,7 @@ if __name__ == '__main__':
             # Chiudi la connessione quando l'app viene fermata
             if client:
                 client.close()
+<<<<<<< Updated upstream
+=======
+                print("Connessione Weaviate chiusa.")
+>>>>>>> Stashed changes

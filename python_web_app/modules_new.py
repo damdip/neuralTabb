@@ -1,4 +1,8 @@
+<<<<<<< Updated upstream
 # modules/weWaviate_manager.py
+=======
+# modules/weaviate_manager.py
+>>>>>>> Stashed changes
 import pathlib
 import weaviate
 import json
