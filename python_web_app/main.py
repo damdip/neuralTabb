@@ -397,4 +397,3 @@ if __name__ == '__main__':
             # Chiudi la connessione quando l'app viene fermata
             if client:
                 client.close()
-                print("Connessione Weaviate chiusa.")

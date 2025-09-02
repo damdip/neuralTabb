@@ -48,7 +48,3 @@ finally:
     closeConnection(client)
 
 
-
-    
-
-

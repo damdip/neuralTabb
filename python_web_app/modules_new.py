@@ -1,4 +1,4 @@
-# modules/weaviate_manager.py
+# modules/weWaviate_manager.py
 import pathlib
 import weaviate
 import json
