@@ -20,7 +20,7 @@ except Exception as e:
     print(f"Errore di connessione a Weaviate: {e}")
     exit(1)
 
-resetSchema(client, "book_data")
+#resetSchema(client, "book_data")
 
 if(not checkExistingCollection(client, "book_data")):
     #Crea mappa a partire dai dati del dataframe

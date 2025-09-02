@@ -201,28 +201,56 @@ class WeaviateManager:
         try:
             collections = []
             
-            # Per ora solo Documents
-            try:
-                collection = self.client.collections.get("Documents")
-                # Conta documenti
-                response = collection.aggregate.over_all(total_count=True)
-                count = response.total_count
-                
-                collections.append({
-                    "name": "Documents",
-                    "count": count,
-                    "properties": 5,
-                    "vectorizer": "text2vec-transformers"
-                })
-            except:
-                pass
+            # Ottieni tutte le collezioni esistenti
+            all_collection_names = self.client.collections.list_all()
+            
+            for collection_name in all_collection_names:
+                try:
+                    collection = self.client.collections.get(collection_name)
+                    
+                    # Conta documenti
+                    response = collection.aggregate.over_all(total_count=True)
+                    count = response.total_count
+                    
+                    # Ottieni schema per contare proprietà
+                    # Prova a ottenere un documento di esempio per vedere le proprietà
+                    try:
+                        sample = collection.query.fetch_objects(limit=1)
+                        properties_count = len(sample.objects[0].properties.keys()) if sample.objects else 0
+                    except:
+                        properties_count = 0
+                    
+                    # Ottieni configurazione vectorizer (se disponibile)
+                    try:
+                        # La configurazione del vectorizer potrebbe non essere facilmente accessibile
+                        # Per ora usiamo un valore di default
+                        vectorizer = "text2vec-transformers"
+                    except:
+                        vectorizer = "unknown"
+                    
+                    collections.append({
+                        "name": collection_name,
+                        "count": count,
+                        "properties": properties_count,
+                        "vectorizer": vectorizer
+                    })
+                    
+                except Exception as e:
+                    # Se c'è un errore con una collezione specifica, aggiungi info minime
+                    collections.append({
+                        "name": collection_name,
+                        "count": 0,
+                        "properties": 0,
+                        "vectorizer": "error",
+                        "error": str(e)
+                    })
             
             return collections
             
         except Exception as e:
             print(f"Errore lista collezioni: {e}")
             return []
-    
+
     def create_collection(self, name: str, properties: List[Dict[str, Any]]) -> bool:
         """Crea una nuova collezione"""
         try:
@@ -851,7 +879,6 @@ class QASystem:
             response = collection.query.near_text(
                 query=question,
                 limit=5,
-                return_properties=["content", "title", "source"],
                 distance=0.3
             )
             

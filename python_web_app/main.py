@@ -124,25 +124,73 @@ def upload_documents():
     
     return render_template('upload.html')
 
+# Nel tuo file app.py o routes.py
+
 @app.route('/qa', methods=['GET', 'POST'])
 def question_answering():
-    """Sistema Q&A"""
-    if request.method == 'POST':
-        try:
-            question = request.form.get('question')
-            collection = request.form.get('collection', 'Documents')
-            
-            if not question:
-                flash('Inserisci una domanda')
-                return redirect(request.url)
-            
-            result = qa_system.ask_question(question, collection)
-            return render_template('qa.html', question=question, answer=result)
-            
-        except Exception as e:
-            flash(f'Errore: {str(e)}')
+    # Controllo se il client Weaviate è disponibile
+    if not client:
+        return render_template('error.html', error="Connessione Weaviate non disponibile")
     
-    return render_template('qa.html')
+    # Ottieni le collezioni disponibili
+    try:
+        collections = weaviate_manager.list_collections()
+    except Exception as e:
+        print(f"Errore nel recuperare collezioni: {e}")
+        collections = []
+        flash('Errore nel recuperare le collezioni disponibili')
+    
+    if request.method == 'POST':
+        question = request.form.get('question', '').strip()
+        collection_name = request.form.get('collection', '').strip()
+        
+        # Validazione input
+        if not question:
+            flash('Inserisci una domanda')
+            return render_template('qa.html', 
+                                 question=question, 
+                                 collection=collection_name,
+                                 collections=collections)
+        
+        if not collection_name:
+            flash('Seleziona una collezione')
+            return render_template('qa.html', 
+                                 question=question, 
+                                 collection=collection_name,
+                                 collections=collections)
+        
+        try:
+            # Verifica che la collezione esista
+            collection_names = [col.get('name') for col in collections]
+            if collection_name not in collection_names:
+                flash(f'Collezione "{collection_name}" non trovata')
+                return render_template('qa.html', 
+                                     question=question, 
+                                     collection=collection_name,
+                                     collections=collections)
+            
+            # Usa il sistema QA per ottenere la risposta
+            answer = qa_system.ask_question(question, collection_name)
+            
+            if not answer or not answer.get('answer'):
+                flash('Nessuna risposta trovata per la tua domanda')
+            
+            return render_template('qa.html', 
+                                 question=question, 
+                                 collection=collection_name,
+                                 collections=collections,
+                                 answer=answer)
+                                 
+        except Exception as e:
+            print(f"Errore durante la ricerca: {e}")
+            print(f"Traceback: {traceback.format_exc()}")
+            flash(f'Errore nella ricerca: {str(e)}')
+            return render_template('qa.html', 
+                                 question=question, 
+                                 collection=collection_name,
+                                 collections=collections)
+    
+    return render_template('qa.html', collections=collections)
 
 @app.route('/analyze')
 def analyze_data():
