@@ -1,4 +1,5 @@
 # Ambienti virtuali
-neuraltab/
+neuralTabb/
 config/
 dataset/
+python_web_app/__pycache__/
