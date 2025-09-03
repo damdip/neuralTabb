@@ -1,8 +1,4 @@
-<<<<<<< Updated upstream
 # modules/weWaviate_manager.py
-=======
-# modules/weaviate_manager.py
->>>>>>> Stashed changes
 import pathlib
 import weaviate
 import json
@@ -285,7 +281,7 @@ class DataAnalyzer:
         self.client = client
     
     def get_basic_stats(self, collection_name: str = "Documents") -> Dict[str, Any]:
-        """Statistiche base della collezione"""
+        """Statistiche base della collezione - versione flessibile"""
         try:
             # Ottieni collezione
             collection = self.client.collections.get(collection_name)
@@ -294,130 +290,247 @@ class DataAnalyzer:
             count_response = collection.aggregate.over_all(total_count=True)
             total_count = count_response.total_count
             
-            # Ottieni campione per analisi
-            response = collection.query.fetch_objects(
-                limit=1000,
-                return_properties=["title", "content", "source", "category"]
-            )
+            if total_count == 0:
+                return {
+                    "total_documents": 0,
+                    "analyzed_sample": 0,
+                    "available_properties": [],
+                    "error": "Nessun documento nella collezione"
+                }
             
+            # Ottieni un campione per scoprire le proprietà disponibili
+            sample_response = collection.query.fetch_objects(limit=1)
+            if not sample_response.objects:
+                return {
+                    "total_documents": total_count,
+                    "analyzed_sample": 0,
+                    "available_properties": [],
+                    "error": "Impossibile recuperare documenti di esempio"
+                }
+            
+            # Scopri tutte le proprietà disponibili
+            available_properties = list(sample_response.objects[0].properties.keys())
+            print(f"Proprietà disponibili nella collezione {collection_name}: {available_properties}")
+            
+            # Ottieni campione per analisi (senza specificare proprietà)
+            response = collection.query.fetch_objects(limit=1000)
             documents = response.objects
             
-            # Analisi categorie
-            categories = [doc.properties.get('category') for doc in documents if doc.properties.get('category')]
-            category_counts = Counter(categories)
+            # Analisi flessibile delle proprietà
+            property_stats = {}
             
-            # Analisi fonti
-            sources = [doc.properties.get('source') for doc in documents if doc.properties.get('source')]
-            source_counts = Counter(sources)
-            
-            # Analisi lunghezza contenuti
-            content_lengths = [len(doc.properties.get('content', '')) for doc in documents if doc.properties.get('content')]
+            for prop_name in available_properties:
+                prop_values = []
+                for doc in documents:
+                    prop_value = doc.properties.get(prop_name)
+                    if prop_value is not None:
+                        prop_values.append(prop_value)
+                
+                if prop_values:
+                    # Statistiche per questa proprietà
+                    if isinstance(prop_values[0], str):
+                        # Proprietà testuale
+                        lengths = [len(str(val)) for val in prop_values]
+                        unique_values = list(set(prop_values))
+                        
+                        property_stats[prop_name] = {
+                            "type": "text",
+                            "total_values": len(prop_values),
+                            "unique_values": len(unique_values),
+                            "avg_length": np.mean(lengths) if lengths else 0,
+                            "max_length": max(lengths) if lengths else 0,
+                            "sample_values": unique_values[:5]  # Prime 5 per esempio
+                        }
+                    else:
+                        # Proprietà numerica o altro
+                        unique_values = list(set(prop_values))
+                        property_stats[prop_name] = {
+                            "type": "other",
+                            "total_values": len(prop_values),
+                            "unique_values": len(unique_values),
+                            "sample_values": unique_values[:5]
+                        }
             
             return {
                 "total_documents": total_count,
                 "analyzed_sample": len(documents),
-                "categories": dict(category_counts.most_common(10)),
-                "sources": dict(source_counts.most_common(10)),
-                "content_stats": {
-                    "avg_length": np.mean(content_lengths) if content_lengths else 0,
-                    "min_length": min(content_lengths) if content_lengths else 0,
-                    "max_length": max(content_lengths) if content_lengths else 0
-                }
+                "available_properties": available_properties,
+                "property_stats": property_stats
             }
             
         except Exception as e:
             return {"error": str(e)}
     
     def analyze_clusters(self, collection_name: str = "Documents", n_clusters: int = 5) -> Dict[str, Any]:
-        """Analizza cluster semantici"""
+        """Analizza cluster semantici - versione flessibile"""
         try:
-            # Ottieni documenti con vettori
+            # Ottieni documenti con vettori (senza specificare proprietà specifiche)
             collection = self.client.collections.get(collection_name)
             response = collection.query.fetch_objects(
                 limit=500,
-                return_properties=["title", "content"],
                 include_vector=True
             )
             
             documents = response.objects
             
-            if len(documents) < n_clusters:
-                return {"error": "Troppi pochi documenti per il clustering"}
+            if len(documents) == 0:
+                return {"error": "Nessun documento trovato nella collezione"}
             
-            # Estrai vettori
-            vectors = np.array([doc.vector["default"] for doc in documents])
+            if len(documents) < n_clusters:
+                # Riduci automaticamente il numero di cluster
+                n_clusters = min(len(documents), 2)
+                if n_clusters < 2:
+                    return {"error": "Troppi pochi documenti per il clustering (minimo 2)"}
+            
+            # Verifica che i documenti abbiano vettori
+            try:
+                vectors = np.array([doc.vector["default"] for doc in documents])
+            except (KeyError, AttributeError):
+                return {"error": "I documenti non hanno vettori associati"}
             
             # Clustering
             kmeans = KMeans(n_clusters=n_clusters, random_state=42)
             clusters = kmeans.fit_predict(vectors)
+            
+            # Scopri le proprietà testuali disponibili
+            if documents:
+                available_props = list(documents[0].properties.keys())
+                text_props = []
+                for prop in available_props:
+                    sample_value = documents[0].properties.get(prop)
+                    if isinstance(sample_value, str) and len(sample_value) > 10:
+                        text_props.append(prop)
+                
+                if not text_props:
+                    text_props = available_props[:2]  # Usa le prime 2 proprietà
             
             # Analizza cluster
             cluster_info = {}
             for i in range(n_clusters):
                 cluster_docs = [documents[j] for j in range(len(documents)) if clusters[j] == i]
                 
-                # Titoli rappresentativi
-                titles = [doc.properties.get('title', '') for doc in cluster_docs[:5]]
-                
-                # Parole chiave comuni
-                contents = [doc.properties.get('content', '') for doc in cluster_docs]
-                keywords = self._extract_keywords_from_texts(contents)
+                # Usa proprietà flessibili
+                sample_data = []
+                for doc in cluster_docs[:5]:  # Prime 5 per esempio
+                    doc_sample = {}
+                    for prop in text_props:
+                        value = doc.properties.get(prop, '')
+                        if isinstance(value, str) and len(value) > 100:
+                            doc_sample[prop] = value[:100] + "..."
+                        else:
+                            doc_sample[prop] = str(value)
+                    sample_data.append(doc_sample)
                 
                 cluster_info[f"cluster_{i}"] = {
                     "size": len(cluster_docs),
-                    "sample_titles": titles,
-                    "keywords": keywords[:10]
+                    "sample_documents": sample_data,
+                    "available_properties": text_props
                 }
             
-            return cluster_info
+            return {
+                "n_clusters": n_clusters,
+                "total_documents": len(documents),
+                "clusters": cluster_info,
+                "properties_used": text_props
+            }
+            
+        except Exception as e:
+            return {"error": str(e)}
             
         except Exception as e:
             return {"error": str(e)}
     
     def extract_topics(self, collection_name: str = "Documents", n_topics: int = 5) -> List[Dict[str, Any]]:
         """Estrae topic usando LDA"""
+    def extract_topics(self, collection_name: str = "Documents", n_topics: int = 5) -> List[Dict[str, Any]]:
+        """Estrae topic usando LDA - versione flessibile"""
         try:
             # Ottieni documenti
             collection = self.client.collections.get(collection_name)
-            response = collection.query.fetch_objects(
-                limit=1000,
-                return_properties=["content"]
-            )
+            response = collection.query.fetch_objects(limit=1000)
             
             documents = response.objects
-            texts = [doc.properties.get('content', '') for doc in documents if doc.properties.get('content')]
             
-            if len(texts) < n_topics:
+            if not documents:
                 return []
             
-            # Vettorizzazione TF-IDF
-            vectorizer = TfidfVectorizer(
-                max_features=100,
-                stop_words='english',
-                ngram_range=(1, 2)
-            )
-            doc_term_matrix = vectorizer.fit_transform(texts)
+            # Trova proprietà testuali
+            sample_doc = documents[0]
+            text_properties = []
             
-            # LDA
-            lda = LatentDirichletAllocation(n_components=n_topics, random_state=42)
-            lda.fit(doc_term_matrix)
+            for prop_name, prop_value in sample_doc.properties.items():
+                if isinstance(prop_value, str) and len(prop_value) > 50:
+                    text_properties.append(prop_name)
             
-            # Estrai topics
-            feature_names = vectorizer.get_feature_names_out()
-            topics = []
+            if not text_properties:
+                return []
             
-            for topic_idx, topic in enumerate(lda.components_):
-                top_words = [feature_names[i] for i in topic.argsort()[:-11:-1]]
-                topics.append({
-                    "topic_id": topic_idx,
-                    "words": top_words,
-                    "weight": topic.max()
-                })
+            # Usa la proprietà testuale più lunga in media
+            best_prop = None
+            max_avg_length = 0
             
-            return topics
+            for prop in text_properties:
+                lengths = []
+                for doc in documents[:100]:  # Campione per velocità
+                    value = doc.properties.get(prop, '')
+                    if isinstance(value, str):
+                        lengths.append(len(value))
+                
+                if lengths:
+                    avg_length = np.mean(lengths)
+                    if avg_length > max_avg_length:
+                        max_avg_length = avg_length
+                        best_prop = prop
+            
+            if not best_prop:
+                return []
+            
+            # Estrai testi dalla proprietà migliore
+            texts = []
+            for doc in documents:
+                text = doc.properties.get(best_prop, '')
+                if isinstance(text, str) and len(text.strip()) > 20:
+                    texts.append(text)
+            
+            if len(texts) < n_topics:
+                n_topics = min(len(texts), 2)
+                if n_topics < 2:
+                    return []
+            
+            try:
+                # Vettorizzazione TF-IDF
+                vectorizer = TfidfVectorizer(
+                    max_features=100,
+                    stop_words='english',
+                    ngram_range=(1, 2),
+                    min_df=1
+                )
+                doc_term_matrix = vectorizer.fit_transform(texts)
+                
+                # LDA
+                lda = LatentDirichletAllocation(n_components=n_topics, random_state=42, max_iter=10)
+                lda.fit(doc_term_matrix)
+                
+                # Estrai topics
+                feature_names = vectorizer.get_feature_names_out()
+                topics = []
+                
+                for topic_idx, topic in enumerate(lda.components_):
+                    top_words = [feature_names[i] for i in topic.argsort()[:-11:-1]]
+                    topics.append({
+                        "topic_id": topic_idx,
+                        "words": top_words,
+                        "weight": float(topic.max()),
+                        "property_used": best_prop
+                    })
+                
+                return topics
+                
+            except Exception as ve:
+                return [{"error": f"Errore nella vettorizzazione: {str(ve)}"}]
             
         except Exception as e:
-            return []
+            return [{"error": str(e)}]
     
     def _extract_keywords_from_texts(self, texts: List[str]) -> List[str]:
         """Estrae parole chiave da una lista di testi"""
@@ -716,15 +829,30 @@ class KnowledgeExtractor:
         self.nlp = nlp
     
     def extract_entities(self, collection_name: str = "Documents") -> Dict[str, Any]:
-        """Estrae entità nominate"""
+        """Estrae entità nominate - versione flessibile"""
         try:
             # Ottieni documenti
             collection = self.client.collections.get(collection_name)
-            response = collection.query.fetch_objects(
-                limit=500,
-                return_properties=["title", "content"]
-            )
             
+            # Prima ottieni un campione per scoprire le proprietà disponibili
+            sample_response = collection.query.fetch_objects(limit=1)
+            if not sample_response.objects:
+                return {"entities": [], "error": "Nessun documento nella collezione"}
+            
+            # Scopri proprietà testuali disponibili
+            available_properties = list(sample_response.objects[0].properties.keys())
+            text_properties = []
+            
+            for prop_name in available_properties:
+                sample_value = sample_response.objects[0].properties.get(prop_name)
+                if isinstance(sample_value, str) and len(sample_value) > 10:
+                    text_properties.append(prop_name)
+            
+            if not text_properties:
+                return {"entities": [], "error": "Nessuna proprietà testuale trovata nella collezione"}
+            
+            # Ottieni documenti usando solo le proprietà disponibili
+            response = collection.query.fetch_objects(limit=500)
             documents = response.objects
             
             if not self.nlp:
@@ -734,31 +862,50 @@ class KnowledgeExtractor:
             entity_counts = defaultdict(int)
             
             for doc in documents:
-                content = doc.properties.get('content', '') or ""
-                title = doc.properties.get('title', '') or ""
+                # Trova la proprietà con più testo per questo documento
+                best_text = ""
+                doc_title = ""
+                
+                for prop_name in text_properties:
+                    prop_value = doc.properties.get(prop_name, '')
+                    if isinstance(prop_value, str):
+                        if len(prop_value) > len(best_text):
+                            best_text = prop_value
+                        # Usa la prima proprietà corta come "titolo"
+                        if not doc_title and len(prop_value) < 200:
+                            doc_title = prop_value
+                
+                if not best_text:
+                    continue
                 
                 # Processa contenuto
-                doc_nlp = self.nlp(content[:1000])  # Limita per performance
-                
-                for ent in doc_nlp.ents:
-                    entity_info = {
-                        "text": ent.text,
-                        "label": ent.label_,
-                        "start": ent.start_char,
-                        "end": ent.end_char,
-                        "document_id": str(doc.uuid),
-                        "document_title": title
-                    }
+                try:
+                    doc_nlp = self.nlp(best_text[:1000])  # Limita per performance
                     
-                    all_entities.append(entity_info)
-                    entity_counts[f"{ent.text}_{ent.label_}"] += 1
+                    for ent in doc_nlp.ents:
+                        entity_info = {
+                            "text": str(ent.text),
+                            "label": str(ent.label_),
+                            "start": int(ent.start_char),
+                            "end": int(ent.end_char),
+                            "document_id": str(doc.uuid),
+                            "document_title": str(doc_title)[:100] if doc_title else "N/A"
+                        }
+                        
+                        all_entities.append(entity_info)
+                        entity_counts[f"{ent.text}_{ent.label_}"] += 1
+                        
+                except Exception as e:
+                    print(f"Errore processing doc {doc.uuid}: {e}")
+                    continue
             
             # Statistiche
             entity_stats = {
                 "total_entities": len(all_entities),
                 "unique_entities": len(entity_counts),
                 "top_entities": dict(Counter(entity_counts).most_common(20)),
-                "entity_types": dict(Counter([e["label"] for e in all_entities]).most_common())
+                "entity_types": dict(Counter([e["label"] for e in all_entities]).most_common()),
+                "properties_used": text_properties
             }
             
             return {"entities": all_entities[:100], "stats": entity_stats}
@@ -767,17 +914,60 @@ class KnowledgeExtractor:
             return {"entities": [], "error": str(e)}
     
     def extract_keywords(self, collection_name: str = "Documents") -> List[Dict[str, Any]]:
-        """Estrae parole chiave usando TF-IDF"""
+        """Estrae parole chiave usando TF-IDF - versione flessibile"""
         try:
             # Ottieni documenti
             collection = self.client.collections.get(collection_name)
-            response = collection.query.fetch_objects(
-                limit=1000,
-                return_properties=["content"]
-            )
             
+            # Prima ottieni un campione per scoprire le proprietà disponibili
+            sample_response = collection.query.fetch_objects(limit=1)
+            if not sample_response.objects:
+                return []
+            
+            # Scopri proprietà testuali disponibili
+            available_properties = list(sample_response.objects[0].properties.keys())
+            text_properties = []
+            
+            for prop_name in available_properties:
+                sample_value = sample_response.objects[0].properties.get(prop_name)
+                if isinstance(sample_value, str) and len(sample_value) > 20:
+                    text_properties.append(prop_name)
+            
+            if not text_properties:
+                return []
+            
+            # Scegli la proprietà migliore (quella con testo più lungo in media)
+            response = collection.query.fetch_objects(limit=100)  # Campione per valutare
+            sample_docs = response.objects
+            
+            best_property = None
+            max_avg_length = 0
+            
+            for prop_name in text_properties:
+                lengths = []
+                for doc in sample_docs:
+                    prop_value = doc.properties.get(prop_name, '')
+                    if isinstance(prop_value, str):
+                        lengths.append(len(prop_value))
+                
+                if lengths:
+                    avg_length = sum(lengths) / len(lengths)
+                    if avg_length > max_avg_length:
+                        max_avg_length = avg_length
+                        best_property = prop_name
+            
+            if not best_property:
+                return []
+            
+            # Ottieni tutti i documenti e estrai testi dalla proprietà migliore
+            response = collection.query.fetch_objects(limit=1000)
             documents = response.objects
-            texts = [doc.properties.get('content', '') for doc in documents if doc.properties.get('content')]
+            
+            texts = []
+            for doc in documents:
+                text = doc.properties.get(best_property, '')
+                if isinstance(text, str) and len(text.strip()) > 20:
+                    texts.append(text)
             
             if not texts:
                 return []
@@ -791,160 +981,201 @@ class KnowledgeExtractor:
                 max_df=0.8
             )
             
-            tfidf_matrix = vectorizer.fit_transform(texts)
-            feature_names = vectorizer.get_feature_names_out()
-            
-            # Calcola punteggi medi
-            mean_scores = tfidf_matrix.mean(axis=0).A1
-            
-            # Crea lista keywords
-            keywords = []
-            for i, score in enumerate(mean_scores):
-                keywords.append({
-                    "keyword": feature_names[i],
-                    "score": float(score),
-                    "type": "tfidf"
-                })
-            
-            # Ordina per punteggio
-            keywords.sort(key=lambda x: x['score'], reverse=True)
-            
-            return keywords[:50]
+            try:
+                tfidf_matrix = vectorizer.fit_transform(texts)
+                feature_names = vectorizer.get_feature_names_out()
+                
+                # Calcola punteggi medi
+                mean_scores = tfidf_matrix.mean(axis=0).A1
+                
+                # Crea lista keywords
+                keywords = []
+                for i, score in enumerate(mean_scores):
+                    keywords.append({
+                        "keyword": str(feature_names[i]),
+                        "score": float(score),
+                        "type": "tfidf",
+                        "property_used": best_property
+                    })
+                
+                # Ordina per punteggio
+                keywords.sort(key=lambda x: x['score'], reverse=True)
+                
+                return keywords[:50]
+                
+            except Exception as ve:
+                return [{"error": f"Errore nella vettorizzazione: {str(ve)}"}]
             
         except Exception as e:
-            return []
+            return [{"error": str(e)}]
     
     def extract_topics(self, collection_name: str = "Documents", n_topics: int = 5) -> List[Dict[str, Any]]:
-        """Estrae topic usando LDA"""
+        """Estrae topic usando LDA - versione flessibile"""
         try:
             # Ottieni documenti
             collection = self.client.collections.get(collection_name)
-            response = collection.query.fetch_objects(
-                limit=1000,
-                return_properties=["content"]
-            )
             
-            documents = response.objects
-            texts = [doc.properties.get('content', '') for doc in documents if doc.properties.get('content')]
-            
-            if len(texts) < n_topics:
+            # Prima ottieni un campione per scoprire le proprietà disponibili
+            sample_response = collection.query.fetch_objects(limit=1)
+            if not sample_response.objects:
                 return []
             
-            # Preprocessing e vectorizzazione
-            vectorizer = TfidfVectorizer(
-                max_features=100,
-                stop_words='english',
-                ngram_range=(1, 2),
-                min_df=2,
-                max_df=0.8
-            )
+            # Scopri proprietà testuali disponibili
+            available_properties = list(sample_response.objects[0].properties.keys())
+            text_properties = []
             
-            doc_term_matrix = vectorizer.fit_transform(texts)
+            for prop_name in available_properties:
+                sample_value = sample_response.objects[0].properties.get(prop_name)
+                if isinstance(sample_value, str) and len(sample_value) > 50:
+                    text_properties.append(prop_name)
             
-            # LDA
-            lda = LatentDirichletAllocation(
-                n_components=n_topics,
-                random_state=42,
-                max_iter=10
-            )
-            lda.fit(doc_term_matrix)
+            if not text_properties:
+                return []
             
-            # Estrai topics
-            feature_names = vectorizer.get_feature_names_out()
-            topics = []
+            # Scegli la proprietà migliore (quella con testo più lungo in media)
+            response = collection.query.fetch_objects(limit=100)  # Campione per valutare
+            sample_docs = response.objects
             
-            for topic_idx, topic in enumerate(lda.components_):
-                top_words_idx = topic.argsort()[-10:][::-1]
-                top_words = [feature_names[i] for i in top_words_idx]
-                top_weights = [float(topic[i]) for i in top_words_idx]
+            best_property = None
+            max_avg_length = 0
+            
+            for prop_name in text_properties:
+                lengths = []
+                for doc in sample_docs:
+                    prop_value = doc.properties.get(prop_name, '')
+                    if isinstance(prop_value, str):
+                        lengths.append(len(prop_value))
                 
-                topics.append({
-                    "topic_id": topic_idx,
-                    "words": top_words,
-                    "weights": top_weights,
-                    "coherence": float(topic.max())
-                })
+                if lengths:
+                    avg_length = sum(lengths) / len(lengths)
+                    if avg_length > max_avg_length:
+                        max_avg_length = avg_length
+                        best_property = prop_name
             
-            return topics
+            if not best_property:
+                return []
+            
+            # Ottieni tutti i documenti e estrai testi dalla proprietà migliore
+            response = collection.query.fetch_objects(limit=1000)
+            documents = response.objects
+            
+            texts = []
+            for doc in documents:
+                text = doc.properties.get(best_property, '')
+                if isinstance(text, str) and len(text.strip()) > 20:
+                    texts.append(text)
+            
+            if len(texts) < n_topics:
+                n_topics = min(len(texts), 2)
+                if n_topics < 2:
+                    return []
+            
+            try:
+                # Preprocessing e vectorizzazione
+                vectorizer = TfidfVectorizer(
+                    max_features=100,
+                    stop_words='english',
+                    ngram_range=(1, 2),
+                    min_df=1,
+                    max_df=0.8
+                )
+                
+                doc_term_matrix = vectorizer.fit_transform(texts)
+                
+                # LDA
+                lda = LatentDirichletAllocation(
+                    n_components=n_topics,
+                    random_state=42,
+                    max_iter=10
+                )
+                lda.fit(doc_term_matrix)
+                
+                # Estrai topics
+                feature_names = vectorizer.get_feature_names_out()
+                topics = []
+                
+                for topic_idx, topic in enumerate(lda.components_):
+                    top_words_idx = topic.argsort()[-10:][::-1]
+                    top_words = [str(feature_names[i]) for i in top_words_idx]
+                    top_weights = [float(topic[i]) for i in top_words_idx]
+                    
+                    topics.append({
+                        "topic_id": int(topic_idx),
+                        "words": top_words,
+                        "weights": top_weights,
+                        "coherence": float(topic.max()),
+                        "property_used": best_property
+                    })
+                
+                return topics
+                
+            except Exception as ve:
+                return [{"error": f"Errore nella vettorizzazione: {str(ve)}"}]
             
         except Exception as e:
-            return []
+            return [{"error": str(e)}]
 
 
 class QASystem:
     def __init__(self, client):
         self.client = client
     
-    def ask_question(self, question: str, collection_name: str = "Documents") -> Dict[str, Any]:
-        """Risponde a una domanda usando RAG"""
+    def ask_question(self, question: str, collection_name: str = "Documents", limit: int = 5) -> Dict[str, Any]:
+        """Cerca documenti in base a una domanda"""
         try:
-            # Ricerca semantica
+            # Ricerca semantica sui documenti della collezione scelta
             collection = self.client.collections.get(collection_name)
             response = collection.query.near_text(
                 query=question,
-                limit=5,
-                distance=0.3
+                limit=limit,
+                distance=0.5
             )
             
-            if not response.objects:
-                return {
-                    "answer": "Non ho trovato informazioni pertinenti per rispondere alla tua domanda.",
-                    "sources": [],
-                    "confidence": 0.0
-                }
+            # Ottieni tutte le proprietà disponibili dal primo documento per essere generalizzabile
+            available_properties = []
+            if response.objects:
+                available_properties = list(response.objects[0].properties.keys())
             
-            # Costruisci il contesto
-            context_parts = []
             sources = []
             
-            for doc in response.objects:
-                content = doc.properties.get('content', '')
-                title = doc.properties.get('title', '')
-                source = doc.properties.get('source', '')
-                
-                context_parts.append(f"Titolo: {title}\nContenuto: {content[:500]}...")
-                sources.append({
-                    "title": title,
-                    "source": source,
-                    "distance": getattr(doc.metadata, 'distance', 0),
-                    "id": str(doc.uuid)
-                })
-            
-            context = "\n\n".join(context_parts)
-            
-            # Genera risposta usando il contesto (semplificata)
-            answer = self._generate_answer(question, context)
+            if response.objects:
+                for doc in response.objects:
+                    distance = getattr(doc.metadata, 'distance', None)
+                    if distance is None:
+                        distance = 0.0
+                    source_info = {"id": str(doc.uuid), "distance": distance}
+                    
+                    # Debug: stampa tutte le proprietà del documento
+                    print(f"Documento {doc.uuid}:")
+                    print(f"Proprietà disponibili: {list(doc.properties.keys())}")
+                    
+                    for prop_name, prop_value in doc.properties.items():
+                        # Debug: stampa ogni proprietà
+                        print(f"  {prop_name}: {type(prop_value)} - {str(prop_value)[:100]}...")
+                        
+                        source_info[prop_name] = prop_value if prop_value is not None else ""
+                    
+                    sources.append(source_info)
             
             return {
-                "answer": answer,
                 "sources": sources,
-                "confidence": 1.0 - min([s['distance'] for s in sources if 'distance' in s])
+                "total_found": len(sources),
+                "collection_name": collection_name,
+                "available_properties": available_properties,
+                "query": question,
+                "limit_used": limit
             }
             
         except Exception as e:
             return {
-                "answer": f"Errore durante la ricerca: {str(e)}",
                 "sources": [],
-                "confidence": 0.0
+                "total_found": 0,
+                "collection_name": collection_name,
+                "available_properties": [],
+                "query": question,
+                "limit_used": limit,
+                "error": str(e)
             }
-    
-    def _generate_answer(self, question: str, context: str) -> str:
-        """Genera una risposta basata sul contesto (versione semplificata)"""
-        words = question.lower().split()
-        context_lower = context.lower()
-        
-        # Trova le frasi più rilevanti
-        sentences = context.split('.')
-        relevant_sentences = []
-        
-        for sentence in sentences:
-            if any(word in sentence.lower() for word in words):
-                relevant_sentences.append(sentence.strip())
-        
-        if relevant_sentences:
-            return " ".join(relevant_sentences[:3])
-        else:
-            return "Basandomi sui documenti trovati, non riesco a fornire una risposta specifica alla tua domanda."
     
     def search_documents(self, query: str, collection_name: str = "Documents", limit: int = 10) -> List[Dict[str, Any]]:
         """Ricerca documenti per query"""
@@ -953,21 +1184,26 @@ class QASystem:
             response = collection.query.near_text(
                 query=query,
                 limit=limit,
-                return_properties=["title", "content", "source", "category"],
                 distance=0.5
             )
             
             documents = []
             for doc in response.objects:
-                content = doc.properties.get('content', '')
-                documents.append({
-                    "id": str(doc.uuid),
-                    "title": doc.properties.get('title', ''),
-                    "content": content[:200] + "..." if len(content) > 200 else content,
-                    "source": doc.properties.get('source', ''),
-                    "category": doc.properties.get('category', ''),
-                    "relevance": 1.0 - getattr(doc.metadata, 'distance', 0)
-                })
+                # Costruisci il documento in modo generalizzabile
+                doc_data = {"id": str(doc.uuid)}
+                
+                # Aggiungi tutte le proprietà disponibili
+                for prop_name, prop_value in doc.properties.items():
+                    if prop_value:
+                        # Per contenuti lunghi, accorcia per la visualizzazione
+                        if isinstance(prop_value, str) and len(prop_value) > 200:
+                            doc_data[prop_name] = prop_value[:200] + "..."
+                        else:
+                            doc_data[prop_name] = prop_value
+                
+                # Aggiungi la rilevanza
+                doc_data["relevance"] = 1.0 - getattr(doc.metadata, 'distance', 0)
+                documents.append(doc_data)
             
             return documents
             

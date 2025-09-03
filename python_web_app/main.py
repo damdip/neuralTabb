@@ -143,6 +143,15 @@ def question_answering():
     if request.method == 'POST':
         question = request.form.get('question', '').strip()
         collection_name = request.form.get('collection', '').strip()
+        limit = request.form.get('limit', 5)
+        
+        # Converti limit a intero
+        try:
+            limit = int(limit)
+            if limit < 1 or limit > 50:  # Limita tra 1 e 50
+                limit = 5
+        except ValueError:
+            limit = 5
         
         # Validazione input
         if not question:
@@ -150,14 +159,16 @@ def question_answering():
             return render_template('qa.html', 
                                  question=question, 
                                  collection=collection_name,
-                                 collections=collections)
+                                 collections=collections,
+                                 limit=limit)
         
         if not collection_name:
             flash('Seleziona una collezione')
             return render_template('qa.html', 
                                  question=question, 
                                  collection=collection_name,
-                                 collections=collections)
+                                 collections=collections,
+                                 limit=limit)
         
         try:
             # Verifica che la collezione esista
@@ -167,19 +178,21 @@ def question_answering():
                 return render_template('qa.html', 
                                      question=question, 
                                      collection=collection_name,
-                                     collections=collections)
+                                     collections=collections,
+                                     limit=limit)
             
-            # Usa il sistema QA per ottenere la risposta
-            answer = qa_system.ask_question(question, collection_name)
+            # Usa il sistema QA per ottenere i documenti
+            answer = qa_system.ask_question(question, collection_name, limit)
             
-            if not answer or not answer.get('answer'):
-                flash('Nessuna risposta trovata per la tua domanda')
+            # Log della risposta per debug
+            print(f"Documenti trovati: {answer.get('total_found', 0)}")
             
             return render_template('qa.html', 
                                  question=question, 
                                  collection=collection_name,
                                  collections=collections,
-                                 answer=answer)
+                                 answer=answer,
+                                 limit=limit)
                                  
         except Exception as e:
             print(f"Errore durante la ricerca: {e}")
@@ -192,28 +205,103 @@ def question_answering():
     
     return render_template('qa.html', collections=collections)
 
-@app.route('/analyze')
+@app.route('/analyze', methods=['GET', 'POST'])
 def analyze_data():
     """Analisi dei dati"""
+    if not client:
+        return render_template('error.html', error="Connessione Weaviate non disponibile")
+    
+    # Ottieni le collezioni disponibili
     try:
-        collection = request.args.get('collection', 'Documents')
+        collections = weaviate_manager.list_collections()
+    except Exception as e:
+        print(f"Errore nel recuperare collezioni: {e}")
+        collections = []
+    
+    if not collections:
+        return render_template('error.html', error="Nessuna collezione disponibile per l'analisi")
+    
+    collection = None
+    
+    if request.method == 'GET':
+        # GET: ottieni la collezione dai parametri URL
+        collection = request.args.get('collection')
+        print(f"GET request - collection parameter: {collection}")
         
-        # Analisi completa
-        stats = analyzer.get_basic_stats(collection)
-        clusters = analyzer.analyze_clusters(collection)
-        topics = analyzer.extract_topics(collection)
+        if not collection:
+            # Se non è specificata una collezione, mostra il form di selezione
+            print("Mostrando form di selezione collezione")
+            return render_template('analize.html', 
+                                 collections=collections, 
+                                 show_selection=True,
+                                 show_results=False)
+    else:
+        # POST: ottieni la collezione dal form
+        collection = request.form.get('collection')
+        print(f"POST request - collection from form: {collection}")
         
+        if not collection:
+            flash('Seleziona una collezione')
+            return render_template('analize.html', 
+                                 collections=collections, 
+                                 show_selection=True,
+                                 show_results=False)
+    
+    # A questo punto abbiamo una collezione specificata
+    try:
+        # Verifica che la collezione esista
+        collection_names = [col.get('name') for col in collections]
+        
+        if collection not in collection_names:
+            flash(f'Collezione "{collection}" non trovata')
+            return render_template('analize.html', 
+                                 collections=collections, 
+                                 show_selection=True,
+                                 show_results=False)
+        
+        print(f"Analizzando collezione: {collection}")
+        
+        # Analisi completa con gestione errori individuali
         analysis_result = {
-            'stats': stats,
-            'clusters': clusters,
-            'topics': topics,
-            'timestamp': datetime.now().isoformat()
+            'collection_name': collection,
+            'timestamp': datetime.now().isoformat(),
+            'collections': collections,
         }
         
-        return render_template('analyze.html', analysis=analysis_result)
+        # Statistiche base
+        try:
+            stats = analyzer.get_basic_stats(collection)
+            analysis_result['stats'] = stats
+        except Exception as e:
+            print(f"Errore get_basic_stats: {e}")
+            analysis_result['stats'] = {'error': str(e)}
+        
+        # Analisi cluster (riduciamo il numero di cluster per dataset più piccoli)
+        try:
+            clusters = analyzer.analyze_clusters(collection, n_clusters=3)
+            analysis_result['clusters'] = clusters
+        except Exception as e:
+            print(f"Errore analyze_clusters: {e}")
+            analysis_result['clusters'] = {'error': str(e)}
+        
+        # Estrazione topic (riduciamo il numero di topic)
+        try:
+            topics = analyzer.extract_topics(collection, n_topics=3)
+            analysis_result['topics'] = topics
+        except Exception as e:
+            print(f"Errore extract_topics: {e}")
+            analysis_result['topics'] = {'error': str(e)}
+        
+        return render_template('analize.html', 
+                             analysis=analysis_result,
+                             collections=collections,
+                             show_selection=False,
+                             show_results=True)
         
     except Exception as e:
-        return render_template('error.html', error=str(e))
+        print(f"Errore generale in analyze_data: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return render_template('error.html', error=f"Errore durante l'analisi: {str(e)}")
 
 @app.route('/clean', methods=['GET', 'POST'])
 def clean_data():
@@ -273,36 +361,101 @@ def integrate_data():
     
     return render_template('integrate.html')
 
-@app.route('/extract')
+@app.route('/extract', methods=['GET', 'POST'])
 def extract_knowledge():
     """Estrazione conoscenza"""
+    if not client:
+        return render_template('error.html', error="Connessione Weaviate non disponibile")
+    
+    # Ottieni le collezioni disponibili
     try:
-        collection = request.args.get('collection', 'Documents')
+        collections = weaviate_manager.list_collections()
+    except Exception as e:
+        print(f"Errore nel recuperare collezioni: {e}")
+        collections = []
+    
+    if not collections:
+        return render_template('error.html', error="Nessuna collezione disponibile per l'estrazione")
+    
+    collection = None
+    
+    if request.method == 'GET':
+        # GET: ottieni la collezione dai parametri URL
+        collection = request.args.get('collection')
+        print(f"GET request - collection parameter: {collection}")
         
-        # Estrazione entità
-        entities = extractor.extract_entities(collection)
+        if not collection:
+            # Se non è specificata una collezione, mostra il form di selezione
+            print("Mostrando form di selezione collezione per estrazione")
+            return render_template('extract.html', 
+                                 collections=collections, 
+                                 show_selection=True,
+                                 show_results=False)
+    else:
+        # POST: ottieni la collezione dal form
+        collection = request.form.get('collection')
+        print(f"POST request - collection from form: {collection}")
         
-        # Estrazione relazioni
-        relations = extractor.extract_relations(collection)
+        if not collection:
+            flash('Seleziona una collezione')
+            return render_template('extract.html', 
+                                 collections=collections, 
+                                 show_selection=True,
+                                 show_results=False)
+    
+    # A questo punto abbiamo una collezione specificata
+    try:
+        # Verifica che la collezione esista
+        collection_names = [col.get('name') for col in collections]
         
-        # Topic modeling
-        topics = extractor.extract_topics(collection)
+        if collection not in collection_names:
+            flash(f'Collezione "{collection}" non trovata')
+            return render_template('extract.html', 
+                                 collections=collections, 
+                                 show_selection=True,
+                                 show_results=False)
         
-        # Keyword extraction
-        keywords = extractor.extract_keywords(collection)
+        print(f"Estraendo conoscenza dalla collezione: {collection}")
         
         extraction_result = {
-            'entities': entities,
-            'relations': relations,
-            'topics': topics,
-            'keywords': keywords,
+            'collection_name': collection,
             'timestamp': datetime.now().isoformat()
         }
         
-        return render_template('extract.html', extraction=extraction_result)
+        # Estrazione entità
+        try:
+            entities = extractor.extract_entities(collection)
+            extraction_result['entities'] = entities
+        except Exception as e:
+            print(f"Errore extract_entities: {e}")
+            extraction_result['entities'] = {'error': str(e)}
+        
+        # Topic modeling
+        try:
+            topics = extractor.extract_topics(collection)
+            extraction_result['topics'] = topics
+        except Exception as e:
+            print(f"Errore extract_topics: {e}")
+            extraction_result['topics'] = {'error': str(e)}
+        
+        # Keyword extraction
+        try:
+            keywords = extractor.extract_keywords(collection)
+            extraction_result['keywords'] = keywords
+        except Exception as e:
+            print(f"Errore extract_keywords: {e}")
+            extraction_result['keywords'] = {'error': str(e)}
+        
+        return render_template('extract.html', 
+                             extraction=extraction_result,
+                             collections=collections,
+                             show_selection=False,
+                             show_results=True)
         
     except Exception as e:
-        return render_template('error.html', error=str(e))
+        print(f"Errore generale in extract_knowledge: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return render_template('error.html', error=f"Errore durante l'estrazione: {str(e)}")
 
 @app.route('/api/search')
 def api_search():
@@ -397,7 +550,3 @@ if __name__ == '__main__':
             # Chiudi la connessione quando l'app viene fermata
             if client:
                 client.close()
-<<<<<<< Updated upstream
-=======
-                print("Connessione Weaviate chiusa.")
->>>>>>> Stashed changes

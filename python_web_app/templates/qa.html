@@ -1,49 +1,187 @@
 {% extends 'base.html' %}
 {% block title %}Q&A{% endblock %}
 {% block content %}
-  <h1>Q&A</h1>
+  <h1>🔍 Ricerca Documenti</h1>
   <form method="post" action="{{ url_for('question_answering') }}">
     <div class="mb-3">
-      <label for="question" class="form-label">Domanda</label>
-      <input class="form-control" id="question" name="question" value="{{ question or '' }}">
+      <label for="question" class="form-label">Domanda di ricerca</label>
+      <input class="form-control" id="question" name="question" value="{{ question or '' }}" 
+             placeholder="Inserisci la tua domanda per cercare documenti pertinenti...">
     </div>
-    <div class="mb-3">
-      <label for="collection" class="form-label">Collezione</label>
-      {% if collections and collections|length > 0 %}
-        <select class="form-select" id="collection" name="collection">
-          <option value="">Seleziona una collezione...</option>
-          {% for col in collections %}
-            <option value="{{ col.name }}" 
-                    {% if col.name == (collection or 'Documents') %}selected{% endif %}>
-              {{ col.name }} ({{ col.count }} documenti)
-            </option>
-          {% endfor %}
-        </select>
-        <div class="form-text">
-          Collezioni disponibili: {{ collections|length }}
+    
+    <div class="row">
+      <div class="col-md-8">
+        <div class="mb-3">
+          <label for="collection" class="form-label">Collezione</label>
+          {% if collections and collections|length > 0 %}
+            <select class="form-select" id="collection" name="collection">
+              <option value="">Seleziona una collezione...</option>
+              {% for col in collections %}
+                <option value="{{ col.name }}" 
+                        {% if col.name == (collection or 'Documents') %}selected{% endif %}>
+                  {{ col.name }} ({{ col.count }} documenti)
+                </option>
+              {% endfor %}
+            </select>
+            <div class="form-text">
+              Collezioni disponibili: {{ collections|length }}
+            </div>
+          {% else %}
+            <!-- Fallback se non ci sono collezioni -->
+            <input class="form-control" id="collection" name="collection" 
+                   value="{{ collection or 'Documents' }}" 
+                   placeholder="Nome collezione">
+            <div class="form-text text-warning">
+              ⚠️ Nessuna collezione trovata. Inserisci manualmente il nome.
+            </div>
+          {% endif %}
         </div>
-      {% else %}
-        <!-- Fallback se non ci sono collezioni -->
-        <input class="form-control" id="collection" name="collection" 
-               value="{{ collection or 'Documents' }}" 
-               placeholder="Nome collezione">
-        <div class="form-text text-warning">
-          ⚠️ Nessuna collezione trovata. Inserisci manualmente il nome.
+      </div>
+      
+      <div class="col-md-4">
+        <div class="mb-3">
+          <label for="limit" class="form-label">Numero di risultati</label>
+          <select class="form-select" id="limit" name="limit">
+            <option value="5" {% if limit == 5 %}selected{% endif %}>5 risultati</option>
+            <option value="10" {% if limit == 10 %}selected{% endif %}>10 risultati</option>
+            <option value="15" {% if limit == 15 %}selected{% endif %}>15 risultati</option>
+            <option value="20" {% if limit == 20 %}selected{% endif %}>20 risultati</option>
+            <option value="30" {% if limit == 30 %}selected{% endif %}>30 risultati</option>
+            <option value="50" {% if limit == 50 %}selected{% endif %}>50 risultati</option>
+          </select>
+          <div class="form-text">
+            Massimo 50 risultati
+          </div>
         </div>
-      {% endif %}
+      </div>
     </div>
-    <button type="submit" class="btn btn-primary">Chiedi</button>
+    
+    <button type="submit" class="btn btn-primary">🔍 Cerca Documenti</button>
   </form>
 
   {% if answer %}
     <hr>
-    <h4>Risposta</h4>
-    <p>{{ answer.answer }}</p>
-    <h5>Fonti</h5>
-    <ul>
-      {% for s in answer.sources %}
-        <li>{{ s.title }} — {{ s.source }} (relevance: {{ '%.2f'|format(1 - s.distance) if s.distance is defined else s.distance }})</li>
-      {% endfor %}
-    </ul>
+    
+    <div class="alert alert-info">
+      <strong>📊 Risultati della ricerca:</strong> 
+      Trovati {{ answer.total_found }} documenti su {{ answer.limit_used }} richiesti 
+      nella collezione "{{ answer.collection_name }}"
+      {% if answer.query %}
+        <br><strong>Query:</strong> "{{ answer.query }}"
+      {% endif %}
+    </div>
+    
+    {% if answer.sources and answer.sources|length > 0 %}
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0">📄 Fonti utilizzate ({{ answer.sources|length }} documenti)</h5>
+        </div>
+        <div class="card-body">
+          {% for source in answer.sources %}
+            <div class="card mb-3 border-left-primary">
+              <div class="card-header bg-light">
+                <strong>📖 Documento {{ loop.index }}</strong>
+                {% if source.distance is defined %}
+                  <span class="badge bg-success float-end">Rilevanza: {{ "%.1f"|format((1 - source.distance) * 100) }}%</span>
+                {% endif %}
+                <br>
+                <small class="text-muted">ID: {{ source.id }}</small>
+              </div>
+              <div class="card-body">
+                <!-- Mostra tutte le proprietà dinamicamente -->
+                {% for prop_name, prop_value in source.items() %}
+                  {% if prop_name not in ['id', 'distance'] %}
+                    <div class="mb-2 border-bottom pb-2">
+                      <strong class="text-primary">{{ prop_name|title|replace('_', ' ') }}:</strong>
+                      <div class="mt-1">
+                        {% if prop_value and prop_value|string|length > 200 %}
+                          <div class="expandable-content">
+                            <div class="content-preview">
+                              {{ prop_value[:200] }}...
+                              <button class="btn btn-sm btn-outline-primary expand-btn" onclick="toggleContent(this)">
+                                <i class="fas fa-expand"></i> Mostra tutto
+                              </button>
+                            </div>
+                            <div class="content-full" style="display: none;">
+                              {{ prop_value }}
+                              <button class="btn btn-sm btn-outline-secondary collapse-btn" onclick="toggleContent(this)">
+                                <i class="fas fa-compress"></i> Riduci
+                              </button>
+                            </div>
+                          </div>
+                        {% elif prop_value %}
+                          <span class="text-dark">{{ prop_value }}</span>
+                        {% else %}
+                          <span class="text-muted fst-italic">(campo vuoto)</span>
+                        {% endif %}
+                      </div>
+                    </div>
+                  {% endif %}
+                {% endfor %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+      
+      <!-- JavaScript per espandere/contrarre contenuti -->
+      <script>
+        function toggleContent(button) {
+          const container = button.closest('.expandable-content');
+          const preview = container.querySelector('.content-preview');
+          const full = container.querySelector('.content-full');
+          
+          if (preview.style.display === 'none') {
+            // Mostra preview, nascondi full
+            preview.style.display = 'block';
+            full.style.display = 'none';
+          } else {
+            // Mostra full, nascondi preview
+            preview.style.display = 'none';
+            full.style.display = 'block';
+          }
+        }
+      </script>
+      
+      <!-- CSS per migliorare l'aspetto -->
+      <style>
+        .border-left-primary {
+          border-left: 4px solid #007bff !important;
+        }
+        .expandable-content {
+          position: relative;
+        }
+        .expand-btn, .collapse-btn {
+          margin-top: 8px;
+        }
+        .card-body .mb-2:last-child {
+          border-bottom: none !important;
+          padding-bottom: 0 !important;
+        }
+      </style>
+    {% else %}
+      <div class="alert alert-warning">
+        <strong>⚠️ Nessun documento trovato</strong>
+        <br>Non sono stati trovati documenti pertinenti per la tua ricerca.
+        {% if answer.error %}
+          <br><strong>Errore:</strong> {{ answer.error }}
+        {% endif %}
+        <br><br>
+        <strong>Suggerimenti:</strong>
+        <ul class="mb-0">
+          <li>Prova a usare parole chiave diverse</li>
+          <li>Verifica che la collezione selezionata contenga dati</li>
+          <li>Aumenta il numero di risultati da cercare</li>
+        </ul>
+      </div>
+    {% endif %}
+    
+    {% if answer.available_properties %}
+      <div class="mt-3">
+        <small class="text-muted">
+          Proprietà disponibili nella collezione: {{ answer.available_properties|join(', ') }}
+        </small>
+      </div>
+    {% endif %}
   {% endif %}
 {% endblock %}
