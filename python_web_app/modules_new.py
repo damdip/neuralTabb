@@ -283,17 +283,25 @@ class DataAnalyzer:
     def get_basic_stats(self, collection_name: str = "Documents") -> Dict[str, Any]:
         """Statistiche base della collezione - versione flessibile"""
         try:
+            print(f"DEBUG: Tentando di ottenere statistiche per collezione: {collection_name}")
+            
             # Ottieni collezione
             collection = self.client.collections.get(collection_name)
+            print(f"DEBUG: Collezione ottenuta: {collection}")
             
             # Conta documenti totali
             count_response = collection.aggregate.over_all(total_count=True)
             total_count = count_response.total_count
+            print(f"DEBUG: Conteggio documenti: {total_count}")
             
             if total_count == 0:
+                print("DEBUG: Nessun documento nella collezione")
                 return {
                     "total_documents": 0,
                     "analyzed_sample": 0,
+                    "categories": [],
+                    "sources": [],
+                    "content_stats": {"avg_length": 0},
                     "available_properties": [],
                     "error": "Nessun documento nella collezione"
                 }
@@ -304,6 +312,9 @@ class DataAnalyzer:
                 return {
                     "total_documents": total_count,
                     "analyzed_sample": 0,
+                    "categories": [],
+                    "sources": [],
+                    "content_stats": {"avg_length": 0},
                     "available_properties": [],
                     "error": "Impossibile recuperare documenti di esempio"
                 }
@@ -318,6 +329,9 @@ class DataAnalyzer:
             
             # Analisi flessibile delle proprietà
             property_stats = {}
+            categories = set()
+            sources = set()
+            content_lengths = []
             
             for prop_name in available_properties:
                 prop_values = []
@@ -325,6 +339,18 @@ class DataAnalyzer:
                     prop_value = doc.properties.get(prop_name)
                     if prop_value is not None:
                         prop_values.append(prop_value)
+                        
+                        # Estrai categorie da campi che potrebbero contenere categorie
+                        if 'category' in prop_name.lower() or 'genre' in prop_name.lower() or 'type' in prop_name.lower():
+                            categories.add(str(prop_value))
+                        
+                        # Estrai sorgenti da campi che potrebbero contenere sorgenti  
+                        if 'source' in prop_name.lower() or 'author' in prop_name.lower() or 'publisher' in prop_name.lower():
+                            sources.add(str(prop_value))
+                        
+                        # Calcola lunghezza del contenuto da campi testuali
+                        if isinstance(prop_value, str) and ('content' in prop_name.lower() or 'text' in prop_name.lower() or 'description' in prop_name.lower()):
+                            content_lengths.append(len(prop_value))
                 
                 if prop_values:
                     # Statistiche per questa proprietà
@@ -351,15 +377,40 @@ class DataAnalyzer:
                             "sample_values": unique_values[:5]
                         }
             
-            return {
+            # Se non abbiamo trovato contenuti specifici, usa tutti i campi testuali
+            if not content_lengths:
+                for doc in documents:
+                    for prop_name, prop_value in doc.properties.items():
+                        if isinstance(prop_value, str):
+                            content_lengths.append(len(prop_value))
+            
+            result = {
                 "total_documents": total_count,
                 "analyzed_sample": len(documents),
+                "categories": list(categories),
+                "sources": list(sources),
+                "content_stats": {
+                    "avg_length": np.mean(content_lengths) if content_lengths else 0,
+                    "max_length": max(content_lengths) if content_lengths else 0,
+                    "total_content": len(content_lengths)
+                },
                 "available_properties": available_properties,
                 "property_stats": property_stats
             }
             
+            print(f"DEBUG: Risultato finale: {result}")
+            return result
+            
         except Exception as e:
-            return {"error": str(e)}
+            print(f"DEBUG: Errore in get_basic_stats: {str(e)}")
+            return {
+                "total_documents": 0,
+                "analyzed_sample": 0,
+                "categories": [],
+                "sources": [],
+                "content_stats": {"avg_length": 0},
+                "error": str(e)
+            }
     
     def analyze_clusters(self, collection_name: str = "Documents", n_clusters: int = 5) -> Dict[str, Any]:
         """Analizza cluster semantici - versione flessibile"""

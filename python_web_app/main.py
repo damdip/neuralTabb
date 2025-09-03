@@ -46,32 +46,31 @@ def index():
     try:
         # Prima controlla se esistono collezioni
         collections = weaviate_manager.list_collections()
+        print(f"Collezioni disponibili: {[col.get('name') for col in collections]}")
         
         # Se non ci sono collezioni, mostra schermata di benvenuto
         if not collections:
             return render_template('index.html', 
                                  show_welcome=True, 
-                                 collections=[],
-                                 stats=None)
+                                 collections=[])
         
         # Controlla se ci sono documenti nelle collezioni
         total_documents = sum(col.get('count', 0) for col in collections)
+        print(f"Documenti totali nelle collezioni: {total_documents}")
         
         # Se non ci sono documenti, mostra schermata di avvio
         if total_documents == 0:
             return render_template('index.html', 
                                  show_empty_collections=True, 
-                                 collections=collections,
-                                 stats=None)
+                                 collections=collections)
         
-        # Se ci sono dati, mostra le statistiche complete
-        stats = analyzer.get_basic_stats()
+        # Se ci sono dati, mostra la dashboard
         return render_template('index.html', 
                              show_dashboard=True,
-                             collections=collections,
-                             stats=stats)
+                             collections=collections)
         
     except Exception as e:
+        print(f"Errore nella homepage: {e}")
         return render_template('error.html', error=str(e))
 
 @app.route('/upload', methods=['GET', 'POST'])
@@ -495,30 +494,7 @@ def manage_collections():
     except Exception as e:
         return render_template('error.html', error=str(e))
 
-@app.route('/collections/create', methods=['POST'])
-def create_collection():
-    """Crea nuova collezione"""
-    try:
-        name = request.form.get('name')
-        properties = request.form.get('properties', '[]')
-        
-        if not name:
-            flash('Nome collezione richiesto')
-            return redirect(url_for('manage_collections'))
-        
-        properties = json.loads(properties)
-        result = weaviate_manager.create_collection(name, properties)
-        
-        if result:
-            flash(f'Collezione {name} creata con successo')
-        else:
-            flash('Errore nella creazione della collezione')
-            
-        return redirect(url_for('manage_collections'))
-        
-    except Exception as e:
-        flash(f'Errore: {str(e)}')
-        return redirect(url_for('manage_collections'))
+
 
 @app.errorhandler(413)
 def request_entity_too_large(error):

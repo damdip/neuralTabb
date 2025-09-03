@@ -133,45 +133,6 @@
     </div>
 </div>
 
-<div class="row">
-    <div class="col-md-3">
-        <div class="card">
-            <div class="card-body text-center">
-                <i class="fas fa-file-alt fa-2x text-primary"></i>
-                <h3 class="mt-2">{{ stats.total_documents or 0 }}</h3>
-                <p class="card-text">Documenti Totali</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card">
-            <div class="card-body text-center">
-                <i class="fas fa-tags fa-2x text-success"></i>
-                <h3 class="mt-2">{{ stats.categories|length if stats.categories else 0 }}</h3>
-                <p class="card-text">Categorie</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card">
-            <div class="card-body text-center">
-                <i class="fas fa-source fa-2x text-info"></i>
-                <h3 class="mt-2">{{ stats.sources|length if stats.sources else 0 }}</h3>
-                <p class="card-text">Sorgenti</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card">
-            <div class="card-body text-center">
-                <i class="fas fa-chart-line fa-2x text-warning"></i>
-                <h3 class="mt-2">{{ "%.0f"|format(stats.content_stats.avg_length) if stats.content_stats else 0 }}</h3>
-                <p class="card-text">Lunghezza Media</p>
-            </div>
-        </div>
-    </div>
-</div>
-
 <div class="row mt-4">
     <div class="col-md-6">
         <div class="card">

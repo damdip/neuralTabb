@@ -18,18 +18,4 @@
       {% endfor %}
     </tbody>
   </table>
-
-  <hr>
-  <h4>Crea nuova collezione</h4>
-  <form method="post" action="{{ url_for('create_collection') }}">
-    <div class="mb-3">
-      <label class="form-label">Nome</label>
-      <input class="form-control" name="name">
-    </div>
-    <div class="mb-3">
-      <label class="form-label">Properties (JSON list)</label>
-      <textarea class="form-control" name="properties">[]</textarea>
-    </div>
-    <button class="btn btn-primary" type="submit">Crea</button>
-  </form>
 {% endblock %}
