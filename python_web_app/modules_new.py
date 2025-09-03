@@ -17,6 +17,7 @@ from weaviateMain import checkExistingCollection, extractChunksAndInsertIntoWeav
 import re
 import requests
 from datetime import datetime
+import google.generativeai as genai
 
 # Per supporto Excel
 try:
@@ -1260,3 +1261,154 @@ class QASystem:
             
         except Exception as e:
             return []
+
+
+
+
+class QASystemWithGemini:
+    def __init__(self, client, api_key_path="chiave.txt"):
+        self.client = client
+        try:
+            with open(api_key_path, 'r') as f:
+                api_key = f.read().strip()
+            genai.configure(api_key=api_key)
+            self.model = genai.GenerativeModel('gemini-pro')
+        except FileNotFoundError:
+            raise Exception(f"File della chiave API non trovato in '{api_key_path}'. Assicurati che il file esista.")
+        except Exception as e:
+            raise Exception(f"Errore durante la configurazione di Gemini: {e}")
+
+    def classify_question(self, question: str) -> str:
+        """Usa Gemini per classificare la domanda come 'analitica' o 'generale'."""
+        prompt = f"""
+        Classifica la seguente domanda come 'analitica' o 'generale'.
+        - 'analitica': la domanda richiede un dato specifico, un conteggio, un'aggregazione o un elenco filtrato (es. "Quanti libri ha scritto X?", "Elenca i libri dopo il 2020").
+        - 'generale': la domanda è aperta e richiede una risposta testuale basata su informazioni contestuali (es. "Parlami dei temi principali dei libri di fantascienza").
+
+        Domanda: "{question}"
+        Classificazione:
+        """
+        try:
+            response = self.model.generate_content(prompt)
+            classification = response.text.strip().lower()
+            if "analitica" in classification:
+                return "analitica"
+            return "generale"
+        except Exception as e:
+            print(f"Errore nella classificazione con Gemini: {e}")
+            return "generale" # Default a generale
+
+    def handle_analytical_question(self, question: str, class_name: str) -> str:
+        """Genera ed esegue una query GraphQL per domande analitiche usando Gemini."""
+        try:
+            collection = self.client.collections.get(class_name)
+            sample = collection.query.fetch_objects(limit=1)
+            if not sample.objects:
+                return f"La collezione '{class_name}' è vuota o non esiste."
+            
+            properties = list(sample.objects[0].properties.keys())
+            
+            schema_prompt = f"""
+            Il database Weaviate contiene una classe chiamata '{class_name}' con le seguenti proprietà: {', '.join(properties)}.
+            Usa l'aggregazione per i conteggi (es. meta {{ count }}).
+            Usa l'operatore 'where' per i filtri.
+            """
+            
+            prompt = f"""
+            {schema_prompt}
+            Traduci la seguente domanda in una query GraphQL per Weaviate. Rispondi solo con il codice della query GraphQL, senza testo aggiuntivo o spiegazioni.
+
+            Domanda: "{question}"
+            Query GraphQL:
+            """
+            
+            response = self.model.generate_content(prompt)
+            graphql_query = response.text.strip().replace("```graphql", "").replace("```", "").strip()
+
+            print(f"Query GraphQL generata da Gemini: {graphql_query}")
+
+            result = self.client.query.raw(graphql_query)
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return f"Impossibile eseguire la query analitica con Gemini: {e}"
+
+    def handle_general_question(self, question: str, class_name: str) -> str:
+        """Usa l'approccio RAG con Gemini per domande generali."""
+        try:
+            collection = self.client.collections.get(class_name)
+            
+            # Scopri le proprietà testuali
+            sample = collection.query.fetch_objects(limit=1)
+            if not sample.objects:
+                 return "La collezione è vuota."
+            
+            text_properties = [k for k, v in sample.objects[0].properties.items() if isinstance(v, str)]
+            if not text_properties:
+                return "Nessuna proprietà testuale trovata per la ricerca."
+
+            result = collection.query.near_text(
+                query=question,
+                limit=3,
+                return_properties=text_properties
+            )
+            
+            context_documents = result.objects
+            if not context_documents:
+                return "Non ho trovato informazioni pertinenti per rispondere alla tua domanda."
+
+            context = "\n".join([f"- Documento: {doc.properties}" for doc in context_documents])
+            
+            prompt = f"""
+            Basandoti esclusivamente sul seguente contesto, rispondi alla domanda.
+
+            Contesto:
+            {context}
+
+            Domanda: {question}
+
+            Risposta:
+            """
+            
+            response = self.model.generate_content(prompt)
+            return response.text.strip()
+        except Exception as e:
+            return f"Impossibile generare la risposta con Gemini: {e}"
+
+    def smart_answer(self, question: str, class_name: str) -> str:
+        """Classifica la domanda e la indirizza alla funzione corretta."""
+        question_type = self.classify_question(question)
+        
+        print(f"Tipo di domanda rilevato da Gemini: {question_type}")
+
+        if question_type == "analitica":
+            return self.handle_analytical_question(question, class_name)
+        else: # 'generale'
+            return self.handle_general_question(question, class_name)
+
+
+# Esempio di utilizzo della classe QASystemWithGemini
+if __name__ == '__main__':
+    try:
+        # Connessione a Weaviate
+        weaviate_client = weaviate.Client("http://localhost:8080")
+
+        # Inizializza il sistema QA con Gemini
+        # Assicurati che 'chiave.txt' sia nel percorso corretto
+        qa_system = QASystemWithGemini(weaviate_client)
+        
+        collection_to_query = "Book" # Sostituisci con il nome della tua collezione
+
+        # Esempio domanda generale
+        general_q = "Parlami dei libri che trattano di magia"
+        print(f"--- Domanda Generale ---\n{general_q}")
+        general_a = qa_system.smart_answer(general_q, collection_to_query)
+        print(f"Risposta: {general_a}\n")
+
+        # Esempio domanda analitica
+        analytical_q = "Quanti libri ha scritto Isaac Asimov?"
+        print(f"--- Domanda Analitica ---\n{analytical_q}")
+        analytical_a = qa_system.smart_answer(analytical_q, collection_to_query)
+        print(f"Risposta: {analytical_a}\n")
+
+    except Exception as e:
+        print(f"Si è verificato un errore principale: {e}")

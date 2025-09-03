@@ -8,7 +8,7 @@ from datetime import datetime
 import traceback
 
 # Import dei moduli personalizzati
-from modules_new import QASystem, DataAnalyzer, DataCleaner, DataIntegrator, KnowledgeExtractor, WeaviateManager
+from modules_new import QASystem, DataAnalyzer, DataCleaner, DataIntegrator, KnowledgeExtractor, WeaviateManager, QASystemWithGemini
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-this'
@@ -30,12 +30,21 @@ try:
     integrator = DataIntegrator(client)
     extractor = KnowledgeExtractor(client)
     
+    # Inizializza il sistema QA con Gemini
+    try:
+        qa_gemini = QASystemWithGemini(client, api_key_path="config/configLLM.txt")
+        print("Sistema QA con Gemini inizializzato con successo")
+    except Exception as e:
+        print(f"Errore nell'inizializzazione del sistema QA con Gemini: {e}")
+        qa_gemini = None
+    
     # Crea lo schema se non esistente
     weaviate_manager.setup_schema()
     
 except Exception as e:
     print(f"Errore connessione Weaviate: {e}")
     client = None
+    qa_gemini = None
 
 @app.route('/')
 def index():
@@ -494,6 +503,109 @@ def manage_collections():
     except Exception as e:
         return render_template('error.html', error=str(e))
 
+
+@app.route('/chat')
+def chat_interface():
+    """Interfaccia di chat per il sistema Q&A con Gemini"""
+    if not client:
+        return render_template('error.html', error="Connessione Weaviate non disponibile")
+    
+    if not qa_gemini:
+        return render_template('error.html', error="Sistema QA con Gemini non disponibile. Verifica che il file 'chiave.txt' esista.")
+    
+    return render_template('chat.html')
+
+
+@app.route('/chat/ask', methods=['POST'])
+def chat_ask():
+    """Endpoint API per le domande della chat"""
+    if not client or not qa_gemini:
+        return jsonify({
+            'success': False,
+            'error': 'Sistema non disponibile'
+        })
+    
+    try:
+        data = request.get_json()
+        question = data.get('question', '').strip()
+        collection_name = data.get('collection', '').strip()
+        
+        if not question:
+            return jsonify({
+                'success': False,
+                'error': 'Domanda non fornita'
+            })
+        
+        if not collection_name:
+            return jsonify({
+                'success': False,
+                'error': 'Collezione non specificata'
+            })
+        
+        # Verifica che la collezione esista
+        try:
+            collections = weaviate_manager.list_collections()
+            collection_names = [col.get('name') for col in collections]
+            if collection_name not in collection_names:
+                return jsonify({
+                    'success': False,
+                    'error': f'Collezione "{collection_name}" non trovata'
+                })
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': f'Errore nel verificare la collezione: {str(e)}'
+            })
+        
+        # Misura il tempo di elaborazione
+        start_time = datetime.now()
+        
+        # Classifica prima la domanda per fornire il tipo all'interfaccia
+        question_type = qa_gemini.classify_question(question)
+        
+        # Ottieni la risposta
+        answer = qa_gemini.smart_answer(question, collection_name)
+        
+        end_time = datetime.now()
+        processing_time = int((end_time - start_time).total_seconds() * 1000)
+        
+        return jsonify({
+            'success': True,
+            'answer': answer,
+            'question_type': question_type,
+            'processing_time': processing_time,
+            'collection': collection_name
+        })
+        
+    except Exception as e:
+        print(f"Errore nella chat: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return jsonify({
+            'success': False,
+            'error': f'Errore durante l\'elaborazione: {str(e)}'
+        })
+
+
+@app.route('/api/collections')
+def api_collections():
+    """API endpoint per ottenere la lista delle collezioni"""
+    if not client:
+        return jsonify({
+            'success': False,
+            'error': 'Connessione Weaviate non disponibile'
+        })
+    
+    try:
+        collections = weaviate_manager.list_collections()
+        return jsonify({
+            'success': True,
+            'collections': collections
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
 
 
 @app.errorhandler(413)

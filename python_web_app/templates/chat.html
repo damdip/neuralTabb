@@ -1,0 +1,423 @@
+{% extends "base.html" %}
+
+{% block title %}Chat Q&A - NeuralTabb{% endblock %}
+
+{% block content %}
+<div class="container-fluid h-100">
+    <div class="row h-100">
+        <div class="col-md-12">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="fas fa-comments"></i> Chat Q&A con Gemini
+                    </h5>
+                    <div class="d-flex align-items-center">
+                        <label for="collection-select" class="form-label me-2 mb-0">Collezione:</label>
+                        <select id="collection-select" class="form-select form-select-sm" style="width: auto;">
+                            <option value="">Caricamento...</option>
+                        </select>
+                        <button id="clear-chat" class="btn btn-outline-secondary btn-sm ms-2">
+                            <i class="fas fa-trash"></i> Pulisci Chat
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="card-body d-flex flex-column p-0" style="height: calc(100vh - 200px);">
+                    <!-- Area messaggi -->
+                    <div id="chat-messages" class="flex-grow-1 overflow-auto p-3" style="background-color: #f8f9fa;">
+                        <div class="text-center text-muted py-5">
+                            <i class="fas fa-robot fa-3x mb-3"></i>
+                            <h5>Benvenuto nel Chat Q&A!</h5>
+                            <p>Seleziona una collezione e inizia a fare domande sui tuoi dati.</p>
+                            <p class="small">
+                                <strong>Tipi di domande supportate:</strong><br>
+                                • <strong>Analitiche:</strong> "Quanti libri ha scritto X?", "Elenca i titoli..."<br>
+                                • <strong>Generali:</strong> "Parlami di...", "Che cosa tratta il libro..."
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <!-- Area input -->
+                    <div class="border-top p-3">
+                        <form id="chat-form" class="d-flex gap-2">
+                            <input type="text" 
+                                   id="user-input" 
+                                   class="form-control" 
+                                   placeholder="Scrivi la tua domanda qui..." 
+                                   disabled>
+                            <button type="submit" 
+                                    id="send-btn" 
+                                    class="btn btn-primary" 
+                                    disabled>
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </form>
+                        <div class="text-muted small mt-2">
+                            <i class="fas fa-info-circle"></i> 
+                            Powered by Google Gemini | Seleziona una collezione per iniziare
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Loading spinner template -->
+<div id="loading-template" class="d-none">
+    <div class="message-bubble assistant-message">
+        <div class="d-flex align-items-center">
+            <div class="spinner-border spinner-border-sm me-2" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <span>Gemini sta elaborando la risposta...</span>
+        </div>
+    </div>
+</div>
+
+<style>
+.chat-container {
+    max-height: calc(100vh - 200px);
+}
+
+.message-bubble {
+    max-width: 80%;
+    margin-bottom: 15px;
+    padding: 12px 16px;
+    border-radius: 18px;
+    word-wrap: break-word;
+    animation: fadeIn 0.3s ease-in;
+}
+
+.user-message {
+    background-color: #007bff;
+    color: white;
+    margin-left: auto;
+    margin-right: 0;
+    border-bottom-right-radius: 4px;
+}
+
+.assistant-message {
+    background-color: #e9ecef;
+    color: #333;
+    margin-left: 0;
+    margin-right: auto;
+    border-bottom-left-radius: 4px;
+    border: 1px solid #dee2e6;
+}
+
+.message-info {
+    font-size: 0.75rem;
+    color: #6c757d;
+    margin-bottom: 5px;
+}
+
+.user-info {
+    text-align: right;
+}
+
+.assistant-info {
+    text-align: left;
+}
+
+.message-content {
+    line-height: 1.4;
+}
+
+.question-type-badge {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 10px;
+    margin-left: 8px;
+}
+
+.analytical-badge {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.general-badge {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes typing {
+    0%, 20% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+.typing-indicator {
+    animation: typing 1.5s infinite;
+}
+
+#chat-messages {
+    scroll-behavior: smooth;
+}
+
+/* Scrollbar personalizzata */
+#chat-messages::-webkit-scrollbar {
+    width: 6px;
+}
+
+#chat-messages::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+#chat-messages::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+}
+
+#chat-messages::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}
+
+.error-message {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+pre {
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+    padding: 10px;
+    font-size: 0.9rem;
+    overflow-x: auto;
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const chatMessages = document.getElementById('chat-messages');
+    const chatForm = document.getElementById('chat-form');
+    const userInput = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+    const collectionSelect = document.getElementById('collection-select');
+    const clearChatBtn = document.getElementById('clear-chat');
+    
+    let currentCollection = '';
+    
+    // Carica le collezioni disponibili
+    loadCollections();
+    
+    // Event listeners
+    chatForm.addEventListener('submit', handleSubmit);
+    collectionSelect.addEventListener('change', handleCollectionChange);
+    clearChatBtn.addEventListener('click', clearChat);
+    userInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            chatForm.dispatchEvent(new Event('submit'));
+        }
+    });
+    
+    function loadCollections() {
+        fetch('/api/collections')
+            .then(response => response.json())
+            .then(data => {
+                collectionSelect.innerHTML = '<option value="">-- Seleziona una collezione --</option>';
+                if (data.collections && data.collections.length > 0) {
+                    data.collections.forEach(collection => {
+                        const option = document.createElement('option');
+                        option.value = collection.name;
+                        option.textContent = `${collection.name} (${collection.count} documenti)`;
+                        collectionSelect.appendChild(option);
+                    });
+                } else {
+                    collectionSelect.innerHTML = '<option value="">Nessuna collezione trovata</option>';
+                }
+            })
+            .catch(error => {
+                console.error('Errore caricamento collezioni:', error);
+                collectionSelect.innerHTML = '<option value="">Errore caricamento</option>';
+            });
+    }
+    
+    function handleCollectionChange() {
+        currentCollection = collectionSelect.value;
+        if (currentCollection) {
+            userInput.disabled = false;
+            sendBtn.disabled = false;
+            userInput.placeholder = `Fai una domanda sui dati in "${currentCollection}"...`;
+            
+            // Mostra messaggio di benvenuto per la collezione
+            if (chatMessages.children.length === 1) { // Solo il messaggio iniziale
+                addAssistantMessage(
+                    `Collezione "${currentCollection}" selezionata! Ora puoi farmi domande sui dati. 
+                    Posso rispondere a domande analitiche (conteggi, elenchi) e generali (descrizioni, spiegazioni).`,
+                    'generale'
+                );
+            }
+        } else {
+            userInput.disabled = true;
+            sendBtn.disabled = true;
+            userInput.placeholder = 'Seleziona una collezione per iniziare...';
+        }
+    }
+    
+    function handleSubmit(e) {
+        e.preventDefault();
+        
+        const question = userInput.value.trim();
+        if (!question || !currentCollection) return;
+        
+        // Aggiungi messaggio utente
+        addUserMessage(question);
+        
+        // Pulisci input e disabilita durante l'elaborazione
+        userInput.value = '';
+        userInput.disabled = true;
+        sendBtn.disabled = true;
+        
+        // Mostra indicatore di caricamento
+        const loadingElement = showLoading();
+        
+        // Invia richiesta
+        fetch('/chat/ask', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                question: question,
+                collection: currentCollection
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            // Rimuovi indicatore di caricamento
+            hideLoading(loadingElement);
+            
+            if (data.success) {
+                addAssistantMessage(data.answer, data.question_type, data.processing_time);
+            } else {
+                addErrorMessage(data.error || 'Errore sconosciuto');
+            }
+        })
+        .catch(error => {
+            hideLoading(loadingElement);
+            addErrorMessage('Errore di connessione: ' + error.message);
+        })
+        .finally(() => {
+            // Riabilita input
+            userInput.disabled = false;
+            sendBtn.disabled = false;
+            userInput.focus();
+        });
+    }
+    
+    function addUserMessage(text) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message-bubble user-message';
+        messageDiv.innerHTML = `
+            <div class="message-info user-info">Tu</div>
+            <div class="message-content">${escapeHtml(text)}</div>
+        `;
+        
+        chatMessages.appendChild(messageDiv);
+        scrollToBottom();
+    }
+    
+    function addAssistantMessage(text, questionType = null, processingTime = null) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message-bubble assistant-message';
+        
+        let badge = '';
+        if (questionType) {
+            const badgeClass = questionType === 'analitica' ? 'analytical-badge' : 'general-badge';
+            badge = `<span class="question-type-badge ${badgeClass}">${questionType}</span>`;
+        }
+        
+        let timeInfo = '';
+        if (processingTime) {
+            timeInfo = ` • ${processingTime}ms`;
+        }
+        
+        messageDiv.innerHTML = `
+            <div class="message-info assistant-info">
+                Gemini${badge}${timeInfo}
+            </div>
+            <div class="message-content">${formatResponse(text)}</div>
+        `;
+        
+        chatMessages.appendChild(messageDiv);
+        scrollToBottom();
+    }
+    
+    function addErrorMessage(error) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message-bubble assistant-message error-message';
+        messageDiv.innerHTML = `
+            <div class="message-info assistant-info">
+                <i class="fas fa-exclamation-triangle"></i> Errore
+            </div>
+            <div class="message-content">${escapeHtml(error)}</div>
+        `;
+        
+        chatMessages.appendChild(messageDiv);
+        scrollToBottom();
+    }
+    
+    function showLoading() {
+        const loadingTemplate = document.getElementById('loading-template');
+        const loadingElement = loadingTemplate.cloneNode(true);
+        loadingElement.id = '';
+        loadingElement.classList.remove('d-none');
+        
+        chatMessages.appendChild(loadingElement);
+        scrollToBottom();
+        
+        return loadingElement;
+    }
+    
+    function hideLoading(loadingElement) {
+        if (loadingElement && loadingElement.parentNode) {
+            loadingElement.parentNode.removeChild(loadingElement);
+        }
+    }
+    
+    function clearChat() {
+        chatMessages.innerHTML = `
+            <div class="text-center text-muted py-5">
+                <i class="fas fa-robot fa-3x mb-3"></i>
+                <h5>Chat pulita!</h5>
+                <p>Seleziona una collezione e inizia una nuova conversazione.</p>
+            </div>
+        `;
+    }
+    
+    function scrollToBottom() {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+    
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    function formatResponse(text) {
+        // Cerca pattern JSON e formattali
+        if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
+            try {
+                const jsonObj = JSON.parse(text);
+                return `<pre>${JSON.stringify(jsonObj, null, 2)}</pre>`;
+            } catch (e) {
+                // Se non è JSON valido, mostra come testo normale
+            }
+        }
+        
+        // Formatta il testo normale
+        return escapeHtml(text).replace(/\n/g, '<br>');
+    }
+});
+</script>
+{% endblock %}
