@@ -19,6 +19,13 @@ import requests
 from datetime import datetime
 import google.generativeai as genai
 
+# Import per le query Weaviate native
+try:
+    from weaviate.classes.query import Filter, Metrics, MetadataQuery
+    from weaviate.classes.aggregate import GroupByAggregate
+except ImportError:
+    print("Avviso: Impossibile importare le classi Weaviate. Assicurati di avere weaviate-client v4+ installato.")
+
 # Per supporto Excel
 try:
     import openpyxl
@@ -1266,40 +1273,202 @@ class QASystem:
 
 
 class QASystemWithGemini:
-    def __init__(self, client, api_key_path="chiave.txt"):
+    def __init__(self, client, api_key_path="/config/configLLM.txt"):
         self.client = client
         try:
             with open(api_key_path, 'r') as f:
                 api_key = f.read().strip()
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-pro')
+            
+            # Prova diversi modelli in ordine di preferenza (con Gemini 2.0 Flash come primo)
+            models_to_try = [
+                'gemini-2.0-flash-exp',      # Gemini 2.0 Flash (experimental) - il più recente
+                'gemini-2.0-flash',          # Gemini 2.0 Flash (se disponibile in versione stabile)
+                'gemini-1.5-flash',          # Fallback ai modelli 1.5
+                'gemini-1.5-pro', 
+                'gemini-pro'
+            ]
+            
+            for model_name in models_to_try:
+                try:
+                    self.model = genai.GenerativeModel(model_name)
+                    # Test del modello con una richiesta semplice
+                    test_response = self.model.generate_content("Test")
+                    self.current_model_name = model_name  # Salva il nome del modello utilizzato
+                    print(f"Modello Gemini '{model_name}' inizializzato con successo")
+                    break
+                except Exception as model_error:
+                    print(f"Modello '{model_name}' non disponibile: {model_error}")
+                    continue
+            else:
+                # Se nessun modello funziona, prova a elencare i modelli disponibili
+                try:
+                    available_models = [m.name for m in genai.list_models()]
+                    raise Exception(f"Nessun modello Gemini disponibile. Modelli supportati: {available_models}")
+                except:
+                    raise Exception("Impossibile inizializzare qualsiasi modello Gemini e recuperare la lista dei modelli disponibili")
+                    
         except FileNotFoundError:
             raise Exception(f"File della chiave API non trovato in '{api_key_path}'. Assicurati che il file esista.")
         except Exception as e:
             raise Exception(f"Errore durante la configurazione di Gemini: {e}")
 
     def classify_question(self, question: str) -> str:
-        """Usa Gemini per classificare la domanda come 'analitica' o 'generale'."""
+        """Usa Gemini per classificare la domanda in una delle cinque categorie disponibili."""
         prompt = f"""
-        Classifica la seguente domanda come 'analitica' o 'generale'.
-        - 'analitica': la domanda richiede un dato specifico, un conteggio, un'aggregazione o un elenco filtrato (es. "Quanti libri ha scritto X?", "Elenca i libri dopo il 2020").
-        - 'generale': la domanda è aperta e richiede una risposta testuale basata su informazioni contestuali (es. "Parlami dei temi principali dei libri di fantascienza").
+        Classifica la seguente domanda in una di queste cinque categorie:
+        
+        1. 'conversazionale': Saluti, ringraziamenti, domande sul funzionamento del sistema, cortesie
+           Esempi: "Ciao", "Come stai?", "Grazie", "Come funzioni?", "Che cosa sai fare?", "Chi sei?", "Help", "Aiuto"
+        
+        2. 'analitica': Richiede dati specifici, conteggi, aggregazioni o elenchi filtrati dai dati
+           Esempi: "Quanti libri ha scritto X?", "Elenca i libri dopo il 2020", "Conta gli autori", "Mostra i titoli che contengono..."
+        
+        3. 'generale': Domande aperte sui contenuti che richiedono analisi testuale e contesto
+           Esempi: "Parlami dei temi principali", "Riassumi il contenuto", "Qual è l'argomento principale?"
+        
+        4. 'pulizia': Richieste di pulizia, correzione, normalizzazione o validazione dei dati
+           Esempi: "Pulisci i dati", "Rimuovi i duplicati", "Correggi gli errori", "Normalizza i valori", "Valida i campi"
+        
+        5. 'integrazione': Richieste di unione, collegamento o integrazione di dataset
+           Esempi: "Integra i dataset", "Unisci le tabelle", "Collega i dati", "Combina le informazioni", "Merge dei file"
 
         Domanda: "{question}"
-        Classificazione:
+        
+        Rispondi SOLO con una delle cinque parole: conversazionale, analitica, generale, pulizia, integrazione
         """
         try:
             response = self.model.generate_content(prompt)
             classification = response.text.strip().lower()
-            if "analitica" in classification:
+            
+            if "conversazionale" in classification:
+                return "conversazionale"
+            elif "analitica" in classification:
                 return "analitica"
-            return "generale"
+            elif "generale" in classification:
+                return "generale"
+            elif "pulizia" in classification:
+                return "pulizia"
+            elif "integrazione" in classification:
+                return "integrazione"
+            else:
+                # Se non riconosce, prova a fare una classificazione basata su parole chiave
+                question_lower = question.lower()
+                
+                # Parole chiave conversazionali
+                conversational_keywords = [
+                    "ciao", "salve", "buongiorno", "buonasera", "hello", "hi",
+                    "grazie", "thank", "prego", "scusa", "scusami",
+                    "come stai", "come va", "tutto bene",
+                    "chi sei", "cosa sei", "come funzioni", "cosa fai", "come fai",
+                    "aiuto", "help", "guida", "istruzioni",
+                    "arrivederci", "addio", "bye", "ciao ciao"
+                ]
+                
+                if any(keyword in question_lower for keyword in conversational_keywords):
+                    return "conversazionale"
+                
+                # Parole chiave analitiche
+                analytical_keywords = [
+                    "quanti", "quanto", "conta", "elenca", "lista", "mostra",
+                    "trova", "cerca", "filtra", "dove", "quando",
+                    "maggiore", "minore", "primo", "ultimo", "media", "somma"
+                ]
+                
+                if any(keyword in question_lower for keyword in analytical_keywords):
+                    return "analitica"
+                
+                # Parole chiave pulizia
+                cleaning_keywords = [
+                    "pulisci", "pulire", "pulizia", "clean", "rimuovi duplicati", "duplicati",
+                    "correggi", "correggere", "correzione", "fix", "normalizza", "normalizzare",
+                    "valida", "validare", "validazione", "validate", "formatta", "formato"
+                ]
+                
+                if any(keyword in question_lower for keyword in cleaning_keywords):
+                    return "pulizia"
+                
+                # Parole chiave integrazione
+                integration_keywords = [
+                    "integra", "integrare", "integrazione", "integrate", "unisci", "unire",
+                    "merge", "join", "collega", "collegare", "combina", "combinare",
+                    "fusion", "fusione", "concatena", "concatenare"
+                ]
+                
+                if any(keyword in question_lower for keyword in integration_keywords):
+                    return "integrazione"
+                
+                return "generale"  # Default
         except Exception as e:
             print(f"Errore nella classificazione con Gemini: {e}")
+            print(f"Tipo di errore: {type(e).__name__}")
+            if "404" in str(e) or "not found" in str(e).lower():
+                print("Il modello potrebbe non essere supportato. Prova a riavviare l'applicazione.")
             return "generale" # Default a generale
 
+    def test_connection(self) -> bool:
+        """Testa la connessione con Gemini"""
+        try:
+            response = self.model.generate_content("Ciao, questo è un test di connessione.")
+            return True
+        except Exception as e:
+            print(f"Test connessione Gemini fallito: {e}")
+            return False
+
+    def get_current_model_info(self) -> dict:
+        """Restituisce informazioni sul modello correntemente in uso"""
+        return {
+            "model_name": getattr(self, 'current_model_name', 'Sconosciuto'),
+            "is_gemini_2_0": getattr(self, 'current_model_name', '').startswith('gemini-2.0'),
+            "model_object": str(self.model) if hasattr(self, 'model') else 'Non disponibile'
+        }
+
+    def switch_model(self, model_name: str) -> bool:
+        """Cambia il modello Gemini utilizzato"""
+        try:
+            new_model = genai.GenerativeModel(model_name)
+            # Test del nuovo modello
+            test_response = new_model.generate_content("Test")
+            
+            # Se il test va a buon fine, cambia il modello
+            self.model = new_model
+            self.current_model_name = model_name
+            print(f"Modello cambiato con successo a: {model_name}")
+            return True
+        except Exception as e:
+            print(f"Impossibile cambiare al modello '{model_name}': {e}")
+            return False
+
+    def list_available_models(self):
+        """Elenca i modelli Gemini disponibili"""
+        try:
+            models = genai.list_models()
+            available_models = []
+            for model in models:
+                if 'generateContent' in model.supported_generation_methods:
+                    available_models.append(model.name)
+            print(f"Modelli disponibili per generateContent: {available_models}")
+            return available_models
+        except Exception as e:
+            print(f"Errore nel recuperare i modelli disponibili: {e}")
+            return []
+
+    def list_available_models(self):
+        """Elenca i modelli Gemini disponibili"""
+        try:
+            models = genai.list_models()
+            available_models = []
+            for model in models:
+                if 'generateContent' in model.supported_generation_methods:
+                    available_models.append(model.name)
+            print(f"Modelli disponibili per generateContent: {available_models}")
+            return available_models
+        except Exception as e:
+            print(f"Errore nel recuperare i modelli disponibili: {e}")
+            return []
+
     def handle_analytical_question(self, question: str, class_name: str) -> str:
-        """Genera ed esegue una query GraphQL per domande analitiche usando Gemini."""
+        """Genera ed esegue query native Weaviate per domande analitiche usando Gemini."""
         try:
             collection = self.client.collections.get(class_name)
             sample = collection.query.fetch_objects(limit=1)
@@ -1308,29 +1477,189 @@ class QASystemWithGemini:
             
             properties = list(sample.objects[0].properties.keys())
             
-            schema_prompt = f"""
-            Il database Weaviate contiene una classe chiamata '{class_name}' con le seguenti proprietà: {', '.join(properties)}.
-            Usa l'aggregazione per i conteggi (es. meta {{ count }}).
-            Usa l'operatore 'where' per i filtri.
-            """
+            # Prompt per generare codice Python nativo Weaviate
+            model_info = f" (usando {getattr(self, 'current_model_name', 'Gemini')})" if hasattr(self, 'current_model_name') else ""
+            prompt = f"""
+Sei un esperto di Weaviate database{model_info}. Data una domanda in linguaggio naturale, devi creare codice Python per eseguire query native di Weaviate (NON GraphQL).
+
+COLLEZIONE: {class_name}
+PROPRIETÀ DISPONIBILI: {', '.join(properties)}
+DOMANDA: {question}
+
+ESEMPI DI SINTASSI WEAVIATE PYTHON CLIENT v4:
+
+1. Per CONTARE oggetti (aggregazione):
+```python
+# Conta totale
+response = collection.aggregate.over_all(total_count=True)
+count = response.total_count
+
+# Conta con filtro
+response = collection.aggregate.over_all(
+    filters=Filter.by_property("author").equal("Stephen King"),
+    total_count=True
+)
+count = response.total_count
+```
+
+2. Per CERCARE/RECUPERARE dati:
+```python
+# Cerca con filtro
+response = collection.query.fetch_objects(
+    filters=Filter.by_property("author").equal("Stephen King"),
+    limit=10
+)
+
+# Cerca per testo semantico
+response = collection.query.near_text(
+    query="fantasy adventure",
+    limit=10
+)
+```
+
+3. FILTRI disponibili:
+- Filter.by_property("campo").equal("valore")
+- Filter.by_property("campo").like("*pattern*")  
+- Filter.by_property("campo").greater_than(numero)
+- Filter.by_property("campo").less_than(numero)
+- Combinazioni: Filter.by_property("a").equal("x") & Filter.by_property("b").greater_than(10)
+
+4. Per AGGREGAZIONI NUMERICHE:
+```python
+# Calcola statistiche su numeri
+response = collection.aggregate.over_all(
+    return_metrics=Metrics("rating").number(
+        sum_=True,
+        maximum=True, 
+        minimum=True,
+        mean=True
+    )
+)
+```
+
+5. Per RAGGRUPPAMENTI:
+```python
+response = collection.aggregate.over_all(
+    group_by=GroupByAggregate(prop="genre")
+)
+```
+
+Genera SOLO il codice Python necessario per rispondere alla domanda. 
+Il risultato deve essere salvato in una variabile chiamata 'response'.
+Non includere import o spiegazioni extra.
+
+CODICE PYTHON:"""
+
+            # Genera il codice con Gemini
+            response = self.model.generate_content(prompt)
+            weaviate_code = response.text.strip()
+            
+            # Pulisci il codice rimuovendo markdown
+            weaviate_code = weaviate_code.replace('```python', '').replace('```', '').strip()
+            
+            print(f"Codice Weaviate generato da Gemini: {weaviate_code}")
+            
+            # Verifica e correggi il codice se necessario
+            weaviate_code = self._validate_and_fix_weaviate_code(weaviate_code)
+            
+            # Prepara l'ambiente per l'esecuzione
+            exec_namespace = {
+                'collection': collection,
+                'Filter': Filter,
+                'Metrics': Metrics,
+                'GroupByAggregate': GroupByAggregate,
+                'MetadataQuery': MetadataQuery
+            }
+            
+            # Esegui il codice generato
+            exec(weaviate_code, exec_namespace)
+            
+            # Il risultato dovrebbe essere in 'response' 
+            response_data = exec_namespace.get('response', None)
+            
+            if response_data is None:
+                return "Errore: il codice generato non ha prodotto risultati."
+            
+            # Formatta la risposta in base al tipo di risultato
+            return self._format_weaviate_response(response_data, question)
+            
+        except Exception as e:
+            print(f"Errore nell'esecuzione query analitica: {e}")
+            # Fallback alla ricerca semantica
+            return self.handle_general_question(question, class_name)
+
+    def handle_conversational_question(self, question: str, class_name: str = None) -> str:
+        """Gestisce domande conversazionali come saluti, ringraziamenti e domande sul sistema."""
+        try:
+            question_lower = question.lower().strip()
+            
+            # Risposte predefinite per risposte rapide
+            quick_responses = {
+                # Saluti
+                "ciao": "Ciao! 👋 Sono qui per aiutarti ad analizzare i tuoi dati. Che cosa vorresti sapere?",
+                "salve": "Salve! Come posso aiutarti oggi con l'analisi dei tuoi dati?",
+                "buongiorno": "Buongiorno! 🌅 Pronto ad aiutarti con le tue domande sui dati.",
+                "buonasera": "Buonasera! 🌅 Come posso assisterti?",
+                "hello": "Hello! How can I help you analyze your data today?",
+                "hi": "Hi there! 👋 Ready to explore your data together?",
+                
+                # Ringraziamenti
+                "grazie": "Prego! 😊 È stato un piacere aiutarti. Hai altre domande?",
+                "thanks": "You're welcome! Any other questions about your data?",
+                "thank you": "You're very welcome! Happy to help with your data analysis.",
+                
+                # Saluti di commiato
+                "arrivederci": "Arrivederci! 👋 Torna quando vuoi per analizzare altri dati!",
+                "addio": "Addio! Spero di averti aiutato. A presto!",
+                "bye": "Bye! 👋 Come back anytime for more data insights!",
+                "ciao ciao": "Ciao ciao! 👋👋 È stato un piacere aiutarti!",
+                
+                # Cortesie
+                "come stai": "Sto bene, grazie! 😊 Sono pronto ad aiutarti con l'analisi dei dati. Tu come stai?",
+                "come va": "Tutto bene! Sto elaborando dati e rispondendo a domande. Come posso aiutarti?",
+                "tutto bene": "Sì, tutto perfetto! Sono qui per te. Che cosa vorresti analizzare?",
+            }
+            
+            # Controlla risposte rapide
+            for key, response in quick_responses.items():
+                if key in question_lower:
+                    return response
+            
+            # Per domande più complesse, usa Gemini con un prompt specializzato
+            model_name = getattr(self, 'current_model_name', 'Gemini')
             
             prompt = f"""
-            {schema_prompt}
-            Traduci la seguente domanda in una query GraphQL per Weaviate. Rispondi solo con il codice della query GraphQL, senza testo aggiuntivo o spiegazioni.
-
-            Domanda: "{question}"
-            Query GraphQL:
+            Sei un assistente AI specializzato nell'analisi di dati chiamato NeuralTabb, che utilizza {model_name} e Weaviate.
+            
+            Rispondi a questa domanda conversazionale in modo amichevole e utile:
+            "{question}"
+            
+            INFORMAZIONI SU DI TE:
+            - Sono NeuralTabb, un sistema di Q&A per dati tabulari
+            - Uso {model_name} per comprendere le domande in linguaggio naturale
+            - Uso Weaviate come database vettoriale per archiviare e cercare nei dati
+            - Posso rispondere a domande analitiche (conteggi, filtri), generali (riassunti, temi)
+            - Posso gestire richieste di pulizia dati (rimozione duplicati, normalizzazione)
+            - Posso gestire richieste di integrazione dati (merge, join, fusione dataset)
+            - Posso analizzare file Excel, pulire dati, fare integrazioni e estrarre conoscenza
+            
+            STILE DI RISPOSTA:
+            - Sii amichevole e professionale
+            - Usa emoji quando appropriato
+            - Se ti chiedono cosa sai fare, spiega le tue capacità principali
+            - Se ti chiedono come funzioni, spiega brevemente la tecnologia
+            - Mantieni un tono conversazionale ma informativo
+            
+            Risposta:
             """
             
             response = self.model.generate_content(prompt)
-            graphql_query = response.text.strip().replace("```graphql", "").replace("```", "").strip()
-
-            print(f"Query GraphQL generata da Gemini: {graphql_query}")
-
-            result = self.client.query.raw(graphql_query)
-            return json.dumps(result, indent=2)
+            return response.text.strip()
+            
         except Exception as e:
-            return f"Impossibile eseguire la query analitica con Gemini: {e}"
+            print(f"Errore nella gestione domanda conversazionale: {e}")
+            # Fallback a una risposta generica
+            return "Ciao! 😊 Sono NeuralTabb, il tuo assistente per l'analisi dei dati. Come posso aiutarti oggi?"
 
     def handle_general_question(self, question: str, class_name: str) -> str:
         """Usa l'approccio RAG con Gemini per domande generali."""
@@ -1374,16 +1703,225 @@ class QASystemWithGemini:
         except Exception as e:
             return f"Impossibile generare la risposta con Gemini: {e}"
 
-    def smart_answer(self, question: str, class_name: str) -> str:
+    def handle_cleaning_question(self, question: str, class_name: str = None) -> str:
+        """Gestisce domande relative alla pulizia e normalizzazione dei dati."""
+        try:
+            # Per ora restituiamo una risposta che indica che la funzionalità sarà implementata
+            model_name = getattr(self, 'current_model_name', 'Gemini')
+            
+            prompt = f"""
+            Sei NeuralTabb, un assistente AI specializzato nella pulizia dei dati usando {model_name}.
+            
+            L'utente ha fatto questa richiesta di pulizia dati:
+            "{question}"
+            
+            ATTUALMENTE DISPONIBILE:
+            - Riconoscimento delle richieste di pulizia dati
+            - Classificazione dei tipi di pulizia richiesti
+            
+            FUNZIONALITÀ IN SVILUPPO (prossime implementazioni):
+            - Rimozione duplicati
+            - Normalizzazione valori
+            - Correzione errori di formato
+            - Validazione campi
+            - Pulizia dati mancanti
+            - Standardizzazione testo
+            
+            Rispondi in modo professionale spiegando che hai compreso la richiesta di pulizia
+            e che questa funzionalità è in fase di sviluppo. Suggerisci quali operazioni 
+            di pulizia potrebbero essere utili per il tipo di richiesta ricevuta.
+            
+            Mantieni un tono incoraggiante e professionale.
+            """
+            
+            response = self.model.generate_content(prompt)
+            return f"🧹 **Richiesta di Pulizia Dati Riconosciuta**\n\n{response.text.strip()}"
+            
+        except Exception as e:
+            print(f"Errore nella gestione domanda di pulizia: {e}")
+            return """🧹 **Richiesta di Pulizia Dati**
+
+Ho riconosciuto che stai chiedendo operazioni di pulizia sui dati. 
+
+**Funzionalità di pulizia in fase di sviluppo:**
+- Rimozione duplicati
+- Normalizzazione valori
+- Correzione errori di formato  
+- Validazione campi
+- Gestione dati mancanti
+
+La tua richiesta è stata registrata e sarà disponibile nel prossimo aggiornamento! 🚀"""
+
+    def handle_integration_question(self, question: str, class_name: str = None) -> str:
+        """Gestisce domande relative all'integrazione e fusione di dataset."""
+        try:
+            # Per ora restituiamo una risposta che indica che la funzionalità sarà implementata
+            model_name = getattr(self, 'current_model_name', 'Gemini')
+            
+            prompt = f"""
+            Sei NeuralTabb, un assistente AI specializzato nell'integrazione di dati usando {model_name}.
+            
+            L'utente ha fatto questa richiesta di integrazione dati:
+            "{question}"
+            
+            ATTUALMENTE DISPONIBILE:
+            - Riconoscimento delle richieste di integrazione dati
+            - Classificazione dei tipi di integrazione richiesti
+            
+            FUNZIONALITÀ IN SVILUPPO (prossime implementazioni):
+            - Merge di dataset multipli
+            - Join basato su chiavi comuni
+            - Concatenazione di file
+            - Fusione intelligente di schemi
+            - Risoluzione conflitti dati
+            - Mappatura automatica campi
+            
+            Rispondi in modo professionale spiegando che hai compreso la richiesta di integrazione
+            e che questa funzionalità è in fase di sviluppo. Suggerisci quali operazioni 
+            di integrazione potrebbero essere utili per il tipo di richiesta ricevuta.
+            
+            Mantieni un tono incoraggiante e professionale.
+            """
+            
+            response = self.model.generate_content(prompt)
+            return f"🔗 **Richiesta di Integrazione Dati Riconosciuta**\n\n{response.text.strip()}"
+            
+        except Exception as e:
+            print(f"Errore nella gestione domanda di integrazione: {e}")
+            return """🔗 **Richiesta di Integrazione Dati**
+
+Ho riconosciuto che stai chiedendo operazioni di integrazione tra dataset.
+
+**Funzionalità di integrazione in fase di sviluppo:**
+- Merge di dataset multipli
+- Join basato su chiavi comuni  
+- Concatenazione di file
+- Fusione intelligente di schemi
+- Risoluzione conflitti dati
+- Mappatura automatica campi
+
+La tua richiesta è stata registrata e sarà disponibile nel prossimo aggiornamento! 🚀"""
+
+    def smart_answer(self, question: str, class_name: str = None) -> str:
         """Classifica la domanda e la indirizza alla funzione corretta."""
         question_type = self.classify_question(question)
         
         print(f"Tipo di domanda rilevato da Gemini: {question_type}")
 
-        if question_type == "analitica":
+        if question_type == "conversazionale":
+            return self.handle_conversational_question(question, class_name)
+        elif question_type == "analitica":
+            if not class_name:
+                return "Per domande analitiche, devi selezionare una collezione di dati da analizzare. 📊"
             return self.handle_analytical_question(question, class_name)
+        elif question_type == "pulizia":
+            return self.handle_cleaning_question(question, class_name)
+        elif question_type == "integrazione":
+            return self.handle_integration_question(question, class_name)
         else: # 'generale'
+            if not class_name:
+                return "Per domande sui contenuti, devi selezionare una collezione di dati da esplorare. 🔍"
             return self.handle_general_question(question, class_name)
+
+    def _validate_and_fix_weaviate_code(self, code: str) -> str:
+        """Valida e corregge il codice Weaviate generato da Gemini."""
+        try:
+            # Correzioni comuni
+            fixes = [
+                # Assicurati che ci sia una variabile response
+                ("result =", "response ="),
+                ("data =", "response ="),
+                ("query_result =", "response ="),
+                # Fix import statements che potrebbero essere inserite
+                ("from weaviate.classes", "# from weaviate.classes"),
+                ("import Filter", "# import Filter"),
+            ]
+            
+            for old, new in fixes:
+                code = code.replace(old, new)
+            
+            # Assicurati che il codice finisca con l'assegnazione a response
+            if "response =" not in code:
+                if code.strip().split('\n')[-1].startswith(('collection.', 'result', 'data')):
+                    last_line = code.strip().split('\n')[-1]
+                    code = code.replace(last_line, f"response = {last_line}")
+            
+            return code
+            
+        except Exception as e:
+            print(f"Errore nella correzione del codice: {e}")
+            return code
+
+    def _format_weaviate_response(self, response_data, question: str) -> str:
+        """Formatta la risposta di Weaviate in un formato leggibile."""
+        try:
+            # Verifica il tipo di risposta
+            if hasattr(response_data, 'total_count'):
+                # Risposta di aggregazione con conteggio
+                return f"Ho trovato {response_data.total_count} risultati per la tua domanda: '{question}'"
+            
+            elif hasattr(response_data, 'objects') and response_data.objects:
+                # Risposta con oggetti (query normale)
+                count = len(response_data.objects)
+                result = f"Ho trovato {count} risultati per: '{question}'\n\n"
+                
+                for i, obj in enumerate(response_data.objects[:10], 1):  # Mostra max 10 risultati
+                    result += f"{i}. "
+                    props = obj.properties
+                    
+                    # Mostra title se disponibile
+                    if 'title' in props:
+                        result += f"Titolo: {props['title']}"
+                    elif 'nome' in props:
+                        result += f"Nome: {props['nome']}"
+                    
+                    # Aggiungi author se disponibile
+                    if 'author' in props:
+                        result += f" - Autore: {props['author']}"
+                    elif 'autore' in props:
+                        result += f" - Autore: {props['autore']}"
+                    
+                    result += "\n"
+                
+                if count > 10:
+                    result += f"\n... e altri {count-10} risultati."
+                
+                return result
+            
+            elif hasattr(response_data, 'properties'):
+                # Risposta di aggregazione con proprietà numeriche
+                props = response_data.properties
+                result = f"Statistiche per: '{question}'\n\n"
+                
+                for prop_name, values in props.items():
+                    if hasattr(values, 'sum_'):
+                        result += f"• {prop_name} - Somma: {values.sum_}\n"
+                    if hasattr(values, 'maximum'):
+                        result += f"• {prop_name} - Massimo: {values.maximum}\n"
+                    if hasattr(values, 'minimum'):
+                        result += f"• {prop_name} - Minimo: {values.minimum}\n"
+                    if hasattr(values, 'mean'):
+                        result += f"• {prop_name} - Media: {values.mean}\n"
+                
+                return result
+            
+            elif hasattr(response_data, 'groups'):
+                # Risposta di raggruppamento
+                result = f"Raggruppamento per: '{question}'\n\n"
+                
+                for group_name, group_data in response_data.groups.items():
+                    result += f"• {group_name}: {group_data.total_count} elementi\n"
+                
+                return result
+            
+            else:
+                # Fallback: prova a convertire in JSON
+                import json
+                return f"Risultato per '{question}':\n{json.dumps(response_data, indent=2, default=str)}"
+                
+        except Exception as e:
+            print(f"Errore nella formattazione della risposta: {e}")
+            return f"Ho ottenuto una risposta per '{question}', ma non riesco a formattarla correttamente. Errore: {str(e)}"
 
 
 # Esempio di utilizzo della classe QASystemWithGemini
@@ -1409,6 +1947,18 @@ if __name__ == '__main__':
         print(f"--- Domanda Analitica ---\n{analytical_q}")
         analytical_a = qa_system.smart_answer(analytical_q, collection_to_query)
         print(f"Risposta: {analytical_a}\n")
+        
+        # Esempio domanda di pulizia
+        cleaning_q = "Pulisci i dati rimuovendo i duplicati"
+        print(f"--- Domanda di Pulizia ---\n{cleaning_q}")
+        cleaning_a = qa_system.smart_answer(cleaning_q, collection_to_query)
+        print(f"Risposta: {cleaning_a}\n")
+        
+        # Esempio domanda di integrazione
+        integration_q = "Integra questo dataset con altri file"
+        print(f"--- Domanda di Integrazione ---\n{integration_q}")
+        integration_a = qa_system.smart_answer(integration_q, collection_to_query)
+        print(f"Risposta: {integration_a}\n")
 
     except Exception as e:
         print(f"Si è verificato un errore principale: {e}")

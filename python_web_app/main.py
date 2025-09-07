@@ -513,7 +513,10 @@ def chat_interface():
     if not qa_gemini:
         return render_template('error.html', error="Sistema QA con Gemini non disponibile. Verifica che il file 'chiave.txt' esista.")
     
-    return render_template('chat.html')
+    # Ottieni informazioni sul modello corrente
+    model_info = qa_gemini.get_current_model_info() if qa_gemini else {}
+    
+    return render_template('chat.html', model_info=model_info)
 
 
 @app.route('/chat/ask', methods=['POST'])
@@ -536,35 +539,38 @@ def chat_ask():
                 'error': 'Domanda non fornita'
             })
         
-        if not collection_name:
-            return jsonify({
-                'success': False,
-                'error': 'Collezione non specificata'
-            })
+        # Classifica prima la domanda per determinare se serve una collezione
+        question_type = qa_gemini.classify_question(question)
         
-        # Verifica che la collezione esista
-        try:
-            collections = weaviate_manager.list_collections()
-            collection_names = [col.get('name') for col in collections]
-            if collection_name not in collection_names:
+        # Per domande conversazionali non serve una collezione
+        if question_type != "conversazionale":
+            if not collection_name:
                 return jsonify({
                     'success': False,
-                    'error': f'Collezione "{collection_name}" non trovata'
+                    'error': 'Per questo tipo di domanda devi selezionare una collezione',
+                    'question_type': question_type
                 })
-        except Exception as e:
-            return jsonify({
-                'success': False,
-                'error': f'Errore nel verificare la collezione: {str(e)}'
-            })
+            
+            # Verifica che la collezione esista
+            try:
+                collections = weaviate_manager.list_collections()
+                collection_names = [col.get('name') for col in collections]
+                if collection_name not in collection_names:
+                    return jsonify({
+                        'success': False,
+                        'error': f'Collezione "{collection_name}" non trovata'
+                    })
+            except Exception as e:
+                return jsonify({
+                    'success': False,
+                    'error': f'Errore nel verificare la collezione: {str(e)}'
+                })
         
         # Misura il tempo di elaborazione
         start_time = datetime.now()
         
-        # Classifica prima la domanda per fornire il tipo all'interfaccia
-        question_type = qa_gemini.classify_question(question)
-        
-        # Ottieni la risposta
-        answer = qa_gemini.smart_answer(question, collection_name)
+        # Ottieni la risposta (passa None come collection_name se conversazionale)
+        answer = qa_gemini.smart_answer(question, collection_name if question_type != "conversazionale" else None)
         
         end_time = datetime.now()
         processing_time = int((end_time - start_time).total_seconds() * 1000)
