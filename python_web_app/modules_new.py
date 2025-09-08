@@ -1869,17 +1869,31 @@ La tua richiesta è stata registrata e sarà disponibile nel prossimo aggiorname
                     result += f"{i}. "
                     props = obj.properties
                     
-                    # Mostra title se disponibile
-                    if 'title' in props:
-                        result += f"Titolo: {props['title']}"
-                    elif 'nome' in props:
-                        result += f"Nome: {props['nome']}"
+                    # Mostra le prime 3 proprietà disponibili (o tutte se sono meno di 3)
+                    property_names = list(props.keys())
+                    max_props_to_show = min(3, len(property_names))
                     
-                    # Aggiungi author se disponibile
-                    if 'author' in props:
-                        result += f" - Autore: {props['author']}"
-                    elif 'autore' in props:
-                        result += f" - Autore: {props['autore']}"
+                    displayed_props = []
+                    for j in range(max_props_to_show):
+                        prop_name = property_names[j]
+                        prop_value = props[prop_name]
+                        
+                        # Gestisci diversi tipi di dati
+                        if prop_value is None:
+                            prop_value_str = "N/A"
+                        elif isinstance(prop_value, str):
+                            # Se il testo è troppo lungo, troncalo
+                            prop_value_str = prop_value[:100] + "..." if len(str(prop_value)) > 100 else str(prop_value)
+                        else:
+                            prop_value_str = str(prop_value)
+                        
+                        displayed_props.append(f"{prop_name}: {prop_value_str}")
+                    
+                    result += " | ".join(displayed_props)
+                    
+                    # Se ci sono più di 3 proprietà, indica che ce ne sono altre
+                    if len(property_names) > 3:
+                        result += f" | ... (+{len(property_names) - 3} altre proprietà)"
                     
                     result += "\n"
                 
@@ -1922,7 +1936,6 @@ La tua richiesta è stata registrata e sarà disponibile nel prossimo aggiorname
         except Exception as e:
             print(f"Errore nella formattazione della risposta: {e}")
             return f"Ho ottenuto una risposta per '{question}', ma non riesco a formattarla correttamente. Errore: {str(e)}"
-
 
 # Esempio di utilizzo della classe QASystemWithGemini
 if __name__ == '__main__':
