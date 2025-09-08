@@ -1,21 +1,217 @@
 {% extends 'base.html' %}
-{% block title %}Collezioni{% endblock %}
+{% block title %}Gestione Collezioni{% endblock %}
 {% block content %}
-  <h1>Collezioni</h1>
+<div class="container-fluid">
+  <div class="row">
+    <div class="col-md-12">
+      <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1><i class="fas fa-database"></i> Gestione Collezioni</h1>
+        <div class="text-muted">
+          <small>Totale collezioni: {{ collections|length }}</small>
+        </div>
+      </div>
 
-  <table class="table table-striped">
-    <thead>
-      <tr><th>Nome</th><th>Count</th><th>Properties</th><th>Vectorizer</th></tr>
-    </thead>
-    <tbody>
-      {% for c in collections %}
-        <tr>
-          <td>{{ c.name }}</td>
-          <td>{{ c.count }}</td>
-          <td>{{ c.properties }}</td>
-          <td>{{ c.vectorizer }}</td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+      {% if not collections %}
+        <div class="alert alert-info">
+          <i class="fas fa-info-circle"></i> Nessuna collezione trovata. 
+          <a href="{{ url_for('upload_documents') }}">Carica alcuni dati</a> per iniziare.
+        </div>
+      {% else %}
+        <!-- Tabella collezioni migliorata -->
+        <div class="table-responsive">
+          <table class="table table-striped table-hover">
+            <thead class="table-dark">
+              <tr>
+                <th>Nome</th>
+                <th>Documenti</th>
+                <th>Proprietà</th>
+                <th>Vectorizer</th>
+                <th>Azioni</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for c in collections %}
+                <tr>
+                  <td>
+                    <strong>{{ c.name }}</strong>
+                    {% if c.count > 0 %}
+                      <span class="badge bg-success ms-2">Attiva</span>
+                    {% else %}
+                      <span class="badge bg-warning ms-2">Vuota</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <span class="fw-bold">{{ "{:,}".format(c.count) }}</span>
+                    {% if c.count > 1000 %}
+                      <small class="text-muted"> (dataset grande)</small>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if c.property_details %}
+                      <!-- Mostra dettagli proprietà -->
+                      <div class="property-details">
+                        {% for prop in c.property_details %}
+                          <span class="badge bg-light text-dark me-1" title="{{ prop.type }}">
+                            {{ prop.name }}
+                            {% if prop.type %}
+                              <small class="text-muted">({{ prop.type }})</small>
+                            {% endif %}
+                          </span>
+                        {% endfor %}
+                      </div>
+                      <small class="text-muted">{{ c.property_details|length }} proprietà totali</small>
+                    {% else %}
+                      <span class="text-muted">{{ c.properties }} proprietà</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <code class="text-success">{{ c.vectorizer }}</code>
+                  </td>
+                  <td>
+                    <div class="btn-group" role="group">
+                      <!-- Pulsante Esplora -->
+                      {% if c.count > 0 %}
+                        <a href="{{ url_for('explore_collection', collection_name=c.name) }}" 
+                           class="btn btn-sm btn-primary" 
+                           title="Esplora dati">
+                          <i class="fas fa-search"></i> Esplora
+                        </a>
+                      {% else %}
+                        <button class="btn btn-sm btn-primary" disabled title="Collezione vuota">
+                          <i class="fas fa-search"></i> Esplora
+                        </button>
+                      {% endif %}
+                      
+                      <!-- Pulsante Elimina -->
+                      <button type="button" 
+                              class="btn btn-sm btn-danger" 
+                              onclick="confirmDelete('{{ c.name }}', {{ c.count }})"
+                              title="Elimina collezione">
+                        <i class="fas fa-trash"></i>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Statistiche rapide -->
+        <div class="row mt-4">
+          <div class="col-md-4">
+            <div class="card bg-primary text-white">
+              <div class="card-body">
+                <h5 class="card-title">Documenti Totali</h5>
+                <h3>{{ "{:,}".format(collections|sum(attribute='count')) }}</h3>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="card bg-success text-white">
+              <div class="card-body">
+                <h5 class="card-title">Collezioni Attive</h5>
+                <h3>{{ collections|selectattr('count', 'gt', 0)|list|length }}</h3>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="card bg-info text-white">
+              <div class="card-body">
+                <h5 class="card-title">Collezioni Vuote</h5>
+                <h3>{{ collections|selectattr('count', 'eq', 0)|list|length }}</h3>
+              </div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Modal di conferma eliminazione -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Conferma Eliminazione</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-warning">
+          <i class="fas fa-exclamation-triangle"></i>
+          <strong>Attenzione!</strong> Stai per eliminare la collezione <strong id="collectionName"></strong>
+          che contiene <strong id="documentCount"></strong> documenti.
+        </div>
+        <p>Questa operazione è <strong>irreversibile</strong>. Tutti i dati nella collezione saranno persi.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annulla</button>
+        <button type="button" class="btn btn-danger" id="confirmDeleteBtn">
+          <i class="fas fa-trash"></i> Elimina Definitivamente
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.property-details {
+  max-height: 100px;
+  overflow-y: auto;
+  margin-bottom: 5px;
+}
+.property-details .badge {
+  margin-bottom: 2px;
+  font-size: 0.75em;
+}
+</style>
+
+<script>
+let collectionToDelete = '';
+
+function confirmDelete(collectionName, documentCount) {
+  collectionToDelete = collectionName;
+  document.getElementById('collectionName').textContent = collectionName;
+  document.getElementById('documentCount').textContent = documentCount.toLocaleString();
+  
+  const modal = new bootstrap.Modal(document.getElementById('deleteModal'));
+  modal.show();
+}
+
+document.getElementById('confirmDeleteBtn').addEventListener('click', function() {
+  if (collectionToDelete) {
+    // Chiudi il modal
+    const modal = bootstrap.Modal.getInstance(document.getElementById('deleteModal'));
+    modal.hide();
+    
+    // Mostra loading
+    const btn = this;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Eliminazione...';
+    btn.disabled = true;
+    
+    // Esegui eliminazione
+    fetch('/api/collections/' + collectionToDelete, {
+      method: 'DELETE',
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        // Ricarica la pagina per mostrare le modifiche
+        location.reload();
+      } else {
+        alert('Errore nell\'eliminazione: ' + data.message);
+        btn.innerHTML = '<i class="fas fa-trash"></i> Elimina Definitivamente';
+        btn.disabled = false;
+      }
+    })
+    .catch(error => {
+      console.error('Error:', error);
+      alert('Errore di rete durante l\'eliminazione');
+      btn.innerHTML = '<i class="fas fa-trash"></i> Elimina Definitivamente';
+      btn.disabled = false;
+    });
+  }
+});
+</script>
 {% endblock %}

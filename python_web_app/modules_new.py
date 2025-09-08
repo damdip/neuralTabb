@@ -205,7 +205,7 @@ class WeaviateManager:
             return default
     
     def list_collections(self) -> List[Dict[str, Any]]:
-        """Lista tutte le collezioni"""
+        """Lista tutte le collezioni con dettagli completi delle proprietà"""
         try:
             collections = []
             
@@ -220,17 +220,31 @@ class WeaviateManager:
                     response = collection.aggregate.over_all(total_count=True)
                     count = response.total_count
                     
-                    # Ottieni schema per contare proprietà
-                    # Prova a ottenere un documento di esempio per vedere le proprietà
+                    # Ottieni dettagli completi delle proprietà
+                    property_details = []
+                    properties_count = 0
+                    
                     try:
+                        # Prova a ottenere un documento di esempio per vedere le proprietà
                         sample = collection.query.fetch_objects(limit=1)
-                        properties_count = len(sample.objects[0].properties.keys()) if sample.objects else 0
+                        if sample.objects:
+                            sample_properties = sample.objects[0].properties
+                            properties_count = len(sample_properties.keys())
+                            
+                            # Crea dettagli per ogni proprietà
+                            for prop_name, prop_value in sample_properties.items():
+                                prop_type = self._get_property_type(prop_value)
+                                property_details.append({
+                                    "name": prop_name,
+                                    "type": prop_type,
+                                    "sample_value": str(prop_value)[:50] + "..." if len(str(prop_value)) > 50 else str(prop_value)
+                                })
                     except:
                         properties_count = 0
+                        property_details = []
                     
                     # Ottieni configurazione vectorizer (se disponibile)
                     try:
-                        # La configurazione del vectorizer potrebbe non essere facilmente accessibile
                         # Per ora usiamo un valore di default
                         vectorizer = "text2vec-transformers"
                     except:
@@ -240,6 +254,7 @@ class WeaviateManager:
                         "name": collection_name,
                         "count": count,
                         "properties": properties_count,
+                        "property_details": property_details,
                         "vectorizer": vectorizer
                     })
                     
@@ -249,15 +264,119 @@ class WeaviateManager:
                         "name": collection_name,
                         "count": 0,
                         "properties": 0,
-                        "vectorizer": "error",
-                        "error": str(e)
+                        "property_details": [],
+                        "vectorizer": "error"
                     })
             
             return collections
             
         except Exception as e:
-            print(f"Errore lista collezioni: {e}")
+            print(f"Errore nel listare le collezioni: {e}")
             return []
+    
+    def _get_property_type(self, value) -> str:
+        """Determina il tipo di una proprietà dal suo valore"""
+        if value is None:
+            return "null"
+        elif isinstance(value, bool):
+            return "boolean"
+        elif isinstance(value, int):
+            return "integer"
+        elif isinstance(value, float):
+            return "number"
+        elif isinstance(value, str):
+            if len(value) > 100:
+                return "text"
+            else:
+                return "string"
+        elif isinstance(value, list):
+            return f"array[{len(value)}]"
+        elif isinstance(value, dict):
+            return "object"
+        else:
+            return "unknown"
+    
+    def delete_collection(self, collection_name: str) -> bool:
+        """Elimina una collezione e tutti i suoi dati"""
+        try:
+            # Verifica se la collezione esiste
+            if collection_name not in self.client.collections.list_all():
+                raise ValueError(f"Collezione '{collection_name}' non trovata")
+            
+            # Elimina la collezione
+            self.client.collections.delete(collection_name)
+            print(f"Collezione '{collection_name}' eliminata con successo")
+            return True
+            
+        except Exception as e:
+            print(f"Errore nell'eliminazione della collezione '{collection_name}': {e}")
+            return False
+    
+    def get_collection_sample_data(self, collection_name: str, limit: int = 20) -> Dict[str, Any]:
+        """Ottiene dati campione da una collezione per l'esplorazione"""
+        try:
+            collection = self.client.collections.get(collection_name)
+            
+            # Ottieni statistiche generali
+            response = collection.aggregate.over_all(total_count=True)
+            total_count = response.total_count
+            
+            # Ottieni dati campione
+            sample_response = collection.query.fetch_objects(limit=limit)
+            sample_data = []
+            property_info = []
+            
+            for obj in sample_response.objects:
+                try:
+                    # Estrai le proprietà direttamente dall'oggetto
+                    obj_properties = {}
+                    if hasattr(obj, 'properties') and obj.properties:
+                        obj_properties = obj.properties
+                    
+                    # Ottieni l'UUID se disponibile
+                    obj_id = str(obj.uuid) if hasattr(obj, 'uuid') else "N/A"
+                    
+                    sample_data.append({
+                        "id": obj_id,
+                        "properties": obj_properties
+                    })
+                    
+                    # Raccogli informazioni sulle proprietà dalla prima riga
+                    if not property_info and obj_properties:
+                        for prop_name, prop_value in obj_properties.items():
+                            prop_type = self._get_property_type(prop_value)
+                            property_info.append({
+                                "name": prop_name,
+                                "type": prop_type
+                            })
+                            
+                except Exception as obj_error:
+                    print(f"Errore nel processare oggetto: {obj_error}")
+                    # Aggiungi comunque un oggetto vuoto per mantenere la consistenza
+                    sample_data.append({
+                        "id": "Error",
+                        "properties": {"error": f"Errore nel processare oggetto: {str(obj_error)}"}
+                    })
+                    continue
+            
+            return {
+                "collection_name": collection_name,
+                "total_count": total_count,
+                "sample_data": sample_data,
+                "property_info": property_info,
+                "sample_size": len(sample_data)
+            }
+            
+        except Exception as e:
+            print(f"Errore nel recuperare dati campione per '{collection_name}': {e}")
+            return {
+                "collection_name": collection_name,
+                "error": str(e),
+                "total_count": 0,
+                "sample_data": [],
+                "property_info": [],
+                "sample_size": 0
+            }
 
     def create_collection(self, name: str, properties: List[Dict[str, Any]]) -> bool:
         """Crea una nuova collezione"""
@@ -1314,9 +1433,9 @@ class QASystemWithGemini:
             raise Exception(f"Errore durante la configurazione di Gemini: {e}")
 
     def classify_question(self, question: str) -> str:
-        """Usa Gemini per classificare la domanda in una delle cinque categorie disponibili."""
+        """Usa Gemini per classificare la domanda in una delle quattro categorie disponibili."""
         prompt = f"""
-        Classifica la seguente domanda in una di queste cinque categorie:
+        Classifica la seguente domanda in una di queste quattro categorie:
         
         1. 'conversazionale': Saluti, ringraziamenti, domande sul funzionamento del sistema, cortesie
            Esempi: "Ciao", "Come stai?", "Grazie", "Come funzioni?", "Che cosa sai fare?", "Chi sei?", "Help", "Aiuto"
@@ -1327,15 +1446,14 @@ class QASystemWithGemini:
         3. 'generale': Domande aperte sui contenuti che richiedono analisi testuale e contesto
            Esempi: "Parlami dei temi principali", "Riassumi il contenuto", "Qual è l'argomento principale?"
         
-        4. 'pulizia': Richieste di pulizia, correzione, normalizzazione o validazione dei dati
-           Esempi: "Pulisci i dati", "Rimuovi i duplicati", "Correggi gli errori", "Normalizza i valori", "Valida i campi"
-        
-        5. 'integrazione': Richieste di unione, collegamento o integrazione di dataset
-           Esempi: "Integra i dataset", "Unisci le tabelle", "Collega i dati", "Combina le informazioni", "Merge dei file"
+        4. 'pulizia': Richieste di pulizia, correzione, normalizzazione, validazione dei dati e identificazione di problemi
+           Esempi: "Pulisci i dati", "Rimuovi i duplicati", "Correggi gli errori", "Normalizza i valori", "Valida i campi",
+           "Trova record incompleti", "Identifica valori anomali", "Standardizza i formati", "Elimina spazi extra",
+           "Controlla la consistenza", "Verifica l'integrità", "Rimuovi caratteri speciali", "Unifica le categorie"
 
         Domanda: "{question}"
         
-        Rispondi SOLO con una delle cinque parole: conversazionale, analitica, generale, pulizia, integrazione
+        Rispondi SOLO con una delle quattro parole: conversazionale, analitica, generale, pulizia
         """
         try:
             response = self.model.generate_content(prompt)
@@ -1486,6 +1604,11 @@ COLLEZIONE: {class_name}
 PROPRIETÀ DISPONIBILI: {', '.join(properties)}
 DOMANDA: {question}
 
+IMPORTANTE - GESTIONE PERFORMANCE:
+- Per query di AGGREGAZIONE/RAGGRUPPAMENTO: usa filtri per limitare il dataset se necessario
+- Per query di CONTEGGIO: usare total_count=True (veloce)
+- Per query di RICERCA: limit massimo 50 per prestazioni ottimali
+
 ESEMPI DI SINTASSI WEAVIATE PYTHON CLIENT v4:
 
 1. Per CONTARE oggetti (aggregazione):
@@ -1539,14 +1662,48 @@ response = collection.aggregate.over_all(
 
 5. Per RAGGRUPPAMENTI:
 ```python
+# Raggruppamento semplice - le aggregazioni processano tutti i dati
+response = collection.aggregate.over_all(
+    group_by=GroupByAggregate(prop="genre")
+)
+
+# Raggruppamento con filtro per limitare il dataset
+response = collection.aggregate.over_all(
+    group_by=GroupByAggregate(prop="category"),
+    filters=Filter.by_property("year").greater_than(2000)
+)
+```
+
+6. REGOLE PER I LIMITI:
+- Aggregazioni/Raggruppamenti: NON supportano 'limit' - usa filtri per ridurre il dataset
+- Conteggi semplici: total_count=True (veloce, no limite necessario)  
+- Ricerche/Recupero dati: limit max 50
+- Per dataset grandi: usa filtri specifici nelle aggregazioni
+
+Genera SOLO il codice Python necessario per rispondere alla domanda. 
+Il risultato deve essere salvato in una variabile chiamata 'response'.
+Non includere import o spiegazioni extra.
+
+ESEMPI SPECIFICI PER RAGGRUPPAMENTI:
+Per "raggruppa per genere": 
+```python
 response = collection.aggregate.over_all(
     group_by=GroupByAggregate(prop="genre")
 )
 ```
 
-Genera SOLO il codice Python necessario per rispondere alla domanda. 
-Il risultato deve essere salvato in una variabile chiamata 'response'.
-Non includere import o spiegazioni extra.
+Per "conta libri per autore":
+```python  
+response = collection.aggregate.over_all(
+    group_by=GroupByAggregate(prop="author")
+)
+```
+```python  
+response = collection.aggregate.over_all(
+    group_by=GroupByAggregate(prop="proprietà"),
+    limit=300
+)
+```
 
 CODICE PYTHON:"""
 
@@ -1571,8 +1728,41 @@ CODICE PYTHON:"""
                 'MetadataQuery': MetadataQuery
             }
             
-            # Esegui il codice generato
-            exec(weaviate_code, exec_namespace)
+            try:
+                # Esegui il codice generato con timeout compatibile Windows
+                import threading
+                import time
+                
+                # Variabili per gestire timeout e risultati
+                execution_result = {'completed': False, 'error': None}
+                
+                def execute_code():
+                    try:
+                        exec(weaviate_code, exec_namespace)
+                        execution_result['completed'] = True
+                    except Exception as e:
+                        execution_result['error'] = e
+                
+                # Avvia l'esecuzione in un thread separato
+                thread = threading.Thread(target=execute_code)
+                thread.daemon = True
+                thread.start()
+                
+                # Aspetta al massimo 30 secondi
+                thread.join(timeout=30)
+                
+                if thread.is_alive():
+                    # Il thread è ancora in esecuzione = timeout
+                    return "⏱️ Query troppo complessa - hai provato a raggruppare troppi dati. Prova con un filtro più specifico o un dataset più piccolo."
+                
+                if execution_result['error']:
+                    raise execution_result['error']
+                    
+                if not execution_result['completed']:
+                    return "⚠️ Esecuzione interrotta - prova a semplificare la query."
+                
+            except Exception as e:
+                return f"Errore nell'esecuzione della query: {str(e)}. Prova a riformulare la domanda con termini più specifici."
             
             # Il risultato dovrebbe essere in 'response' 
             response_data = exec_namespace.get('response', None)
@@ -1585,7 +1775,26 @@ CODICE PYTHON:"""
             
         except Exception as e:
             print(f"Errore nell'esecuzione query analitica: {e}")
-            # Fallback alla ricerca semantica
+            
+            # Fallback con suggerimenti specifici per query di raggruppamento
+            if any(word in question.lower() for word in ['raggruppa', 'group', 'conta per', 'quanti per']):
+                return f"""❌ **Errore nella query di raggruppamento**
+
+La query "{question}" ha causato un errore di timeout o complessità.
+
+💡 **Suggerimenti per migliorare la query:**
+- Prova con un filtro più specifico (es: "raggruppa i libri pubblicati dopo il 2000 per genere")  
+- Usa termini più precisi per le proprietà
+- Prova a dividere la query in parti più piccole
+
+🔍 **Query alternative che potresti provare:**
+- "quanti libri ci sono in totale?"
+- "mostra i primi 10 libri per genere"
+- "conta i libri per un genere specifico"
+
+Errore tecnico: {str(e)}"""
+            
+            # Fallback alla ricerca semantica per altri tipi di errore
             return self.handle_general_question(question, class_name)
 
     def handle_conversational_question(self, question: str, class_name: str = None) -> str:
@@ -1920,13 +2129,45 @@ La tua richiesta è stata registrata e sarà disponibile nel prossimo aggiorname
                 return result
             
             elif hasattr(response_data, 'groups'):
-                # Risposta di raggruppamento
-                result = f"Raggruppamento per: '{question}'\n\n"
+                # Risposta di raggruppamento (nuova gestione per Weaviate v4)
+                result = f"📊 **Raggruppamento per: '{question}'**\n\n"
                 
-                for group_name, group_data in response_data.groups.items():
-                    result += f"• {group_name}: {group_data.total_count} elementi\n"
+                if hasattr(response_data.groups, 'items'):
+                    # Nuova struttura Weaviate v4
+                    for group in response_data.groups:
+                        group_name = getattr(group, 'grouped_by', {}).get('value', 'Non specificato')
+                        count = getattr(group, 'total_count', 0)
+                        result += f"• **{group_name}**: {count} elementi\n"
+                else:
+                    # Struttura legacy
+                    for group_name, group_data in response_data.groups.items():
+                        count = getattr(group_data, 'total_count', 0)
+                        result += f"• **{group_name}**: {count} elementi\n"
                 
                 return result
+                
+            # Gestione specifica per aggregazioni Weaviate v4
+            elif hasattr(response_data, '__dict__') and any(hasattr(response_data, attr) for attr in ['groups', 'total_count']):
+                result = f"📊 **Risultati per: '{question}'**\n\n"
+                
+                # Prova a gestire diverse strutture di aggregazione
+                if hasattr(response_data, 'groups') and response_data.groups:
+                    # Gestione gruppi
+                    groups = response_data.groups if hasattr(response_data.groups, '__iter__') else [response_data.groups]
+                    for i, group in enumerate(groups):
+                        if hasattr(group, 'grouped_by') and hasattr(group, 'total_count'):
+                            group_value = group.grouped_by.get('value', f'Gruppo {i+1}')
+                            result += f"• **{group_value}**: {group.total_count} elementi\n"
+                        elif hasattr(group, 'name') and hasattr(group, 'count'):
+                            result += f"• **{group.name}**: {group.count} elementi\n"
+                        else:
+                            # Fallback - prova a estrarre qualsiasi informazione disponibile
+                            result += f"• **Gruppo {i+1}**: {getattr(group, 'total_count', 'N/D')} elementi\n"
+                
+                elif hasattr(response_data, 'total_count'):
+                    result += f"Totale elementi: {response_data.total_count}\n"
+                
+                return result if result != f"📊 **Risultati per: '{question}'**\n\n" else "Risultati di aggregazione ricevuti ma formato non riconosciuto."
             
             else:
                 # Fallback: prova a convertire in JSON

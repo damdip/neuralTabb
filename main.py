@@ -1,6 +1,6 @@
 import pandas as pd
 from python_web_app.pandasToWeaviate import interactive_weaviate_types, get_properties_from_map,deterministic_weaviate_types
-from python_web_app.weaviateMain import create_weaviate_client, checkExistingCollection, extractChunksAndInsertIntoWeaviate, extractChunksAndInsertIntoWeaviateProgressBar, insertElementsWithDynamicBatch, insertElementsWithDynamicBatchFix, insertElementsWithDynamicBatchFixProgressBar, insertManyElements, resetSchema,closeConnection, createSchema, insertElement, createElementData, retrieveElements
+from python_web_app.weaviateMain import create_weaviate_client, checkExistingCollection, extractChunksAndInsertIntoWeaviate, extractChunksAndInsertIntoWeaviateProgressBar, insertElementsWithDynamicBatchFix, insertElementsWithDynamicBatchFixProgressBar, insertManyElements, resetSchema,closeConnection, createSchema, insertElement, createElementData, retrieveElements
 path_book_data = "dataset/readyToUse/book_data_processed_and_cleaned_small.xlsx"
 
 ##path_book_reviews = "dataset/readyToUse/book_reviews_sampled.xlsx"

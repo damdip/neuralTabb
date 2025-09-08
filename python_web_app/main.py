@@ -614,6 +614,87 @@ def api_collections():
         })
 
 
+@app.route('/api/collections/<collection_name>', methods=['DELETE'])
+def delete_collection(collection_name):
+    """API endpoint per eliminare una collezione"""
+    if not client:
+        return jsonify({
+            'success': False,
+            'message': 'Connessione Weaviate non disponibile'
+        })
+    
+    try:
+        success = weaviate_manager.delete_collection(collection_name)
+        if success:
+            return jsonify({
+                'success': True,
+                'message': f'Collezione {collection_name} eliminata con successo'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': f'Errore nell\'eliminazione della collezione {collection_name}'
+            })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Errore: {str(e)}'
+        })
+
+
+@app.route('/explore/<collection_name>')
+def explore_collection(collection_name):
+    """Pagina per esplorare i dati di una collezione"""
+    if not client:
+        return render_template('error.html', error="Connessione Weaviate non disponibile")
+    
+    try:
+        # Ottieni dati campione della collezione
+        collection_data = weaviate_manager.get_collection_sample_data(collection_name, limit=50)
+        
+        if 'error' in collection_data:
+            return render_template('error.html', error=f"Errore nel caricamento della collezione: {collection_data['error']}")
+        
+        return render_template('explore_collection.html', 
+                             collection_data=collection_data,
+                             collection_name=collection_name)
+        
+    except Exception as e:
+        return render_template('error.html', error=str(e))
+
+
+@app.route('/api/collections/<collection_name>/data')
+def api_collection_data(collection_name):
+    """API endpoint per ottenere dati paginati di una collezione"""
+    if not client:
+        return jsonify({'success': False, 'error': 'Connessione Weaviate non disponibile'})
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        offset = (page - 1) * limit
+        
+        # Per Weaviate, non c'è un offset diretto, ma possiamo simularlo
+        # Per ora prendiamo più dati e filtriamo lato client
+        collection_data = weaviate_manager.get_collection_sample_data(collection_name, limit=limit*page)
+        
+        # Simula la paginazione
+        sample_data = collection_data['sample_data']
+        paginated_data = sample_data[offset:offset+limit] if len(sample_data) > offset else []
+        
+        return jsonify({
+            'success': True,
+            'data': paginated_data,
+            'total': collection_data['total_count'],
+            'page': page,
+            'limit': limit,
+            'has_more': len(sample_data) == limit*page
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
 @app.errorhandler(413)
 def request_entity_too_large(error):
     max_size_mb = app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)
