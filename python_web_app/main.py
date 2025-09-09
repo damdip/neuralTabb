@@ -8,7 +8,7 @@ from datetime import datetime
 import traceback
 
 # Import dei moduli personalizzati
-from modules_new import QASystem, DataAnalyzer, DataCleaner, DataIntegrator, KnowledgeExtractor, WeaviateManager, QASystemWithGemini
+from python_web_app.modules import QASystem, DataAnalyzer, DataCleaner, DataIntegrator, KnowledgeExtractor, WeaviateManager, QASystemWithGemini
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-this'

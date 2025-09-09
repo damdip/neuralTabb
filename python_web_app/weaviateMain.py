@@ -7,6 +7,7 @@ from datetime import datetime
 from weaviate.classes.config import Configure
 from weaviate.classes.data import DataObject
 import pickle 
+import numpy as np
 
 def create_weaviate_client():
     weaviate_client = weaviate.connect_to_local()
@@ -46,11 +47,16 @@ def createSchema(weaviate_client, collections_name, collection_properties):
     except weaviate.exceptions.SchemaValidationException as e:
         print(f"An error occurred while creating the schema: {e}")
 
+def retrieveElements(weaviate_client, collection_name, attribute, limit = 5):
+    # Basic search (fetch objects)
+    collection = weaviate_client.collections.get(collection_name)
+    response = collection.query.fetch_objects(
+        limit=limit,
+        return_properties=[attribute]
+    )
 
-import numpy as np
-
-import numpy as np
-import pandas as pd
+    for item in response.objects:
+        print(item.properties)  # Print the raw text of each item
 
 def createElementData(columns, row):
     """
@@ -86,17 +92,6 @@ def createElementData(columns, row):
     return element_data
 
 
-def insertElement(weaviate_client, collection_name, element_data):
-    """
-    Inserisce un elemento in una collezione Weaviate
-    """
-    collection = weaviate_client.collections.get(collection_name)
-    try:
-        collection.data.insert(
-            properties=element_data
-        )
-    except weaviate.exceptions.SchemaValidationException as e:
-        print(f"An error occurred while inserting the element: {e}")
 
 
 def Key4Gemini():
@@ -109,18 +104,22 @@ def Key4Gemini():
     genai.configure(api_key=GEMINI_KEY)
 
 
+"""
+Metodi per inserimento di elementi in weaviate
 
-def retrieveElements(weaviate_client, collection_name, attribute, limit = 5):
-    # Basic search (fetch objects)
+"""
+
+def insertElement(weaviate_client, collection_name, element_data):
+    """
+    Inserisce un elemento in una collezione Weaviate
+    """
     collection = weaviate_client.collections.get(collection_name)
-    response = collection.query.fetch_objects(
-        limit=limit,
-        return_properties=[attribute]
-    )
-
-    for item in response.objects:
-        print(item.properties)  # Print the raw text of each item
-
+    try:
+        collection.data.insert(
+            properties=element_data
+        )
+    except weaviate.exceptions.SchemaValidationException as e:
+        print(f"An error occurred while inserting the element: {e}")
 
 
 def insertManyElements(weaviate_client, collection_name, df):
@@ -141,10 +140,6 @@ def insertManyElements(weaviate_client, collection_name, df):
     except weaviate.exceptions.SchemaValidationException as e:
         print(f"An error occurred while inserting the elements: {e}")
 
-
-
-
-
 def insertElementsWithDynamicBatchFix(client, collection_name, df):
     """
     Inserimento batch corretto per client v4.
@@ -162,8 +157,6 @@ def insertElementsWithDynamicBatchFix(client, collection_name, df):
     except Exception as e:
         print(f"An error occurred during batch insertion: {e}")
 
-
-    
 def insertElementsWithDynamicBatchFixProgressBar(client, collection_name, df):
     """
     Inserimento batch corretto per client v4 con progress tracking.
@@ -226,8 +219,7 @@ def extractChunksAndInsertIntoWeaviate(weaviate_client, collection_name, df):
         df_chunked = df.iloc[start:end]
     
         insertManyElements(weaviate_client, collection_name, df_chunked)
-        
-            
+                  
 def extractChunksAndInsertIntoWeaviateProgressBar(weaviate_client, collection_name, df):
     num_partitions = int((get_df_size_mb_pickle(df) // 0.07) + 1)
     total_length = len(df)
