@@ -80,12 +80,12 @@
                         </div>
                     </div>
                     <div class="col-md-4 mb-3">
-                        <div class="card border-success">
+                        <div class="card border-primary">
                             <div class="card-body text-center">
-                                <i class="fas fa-puzzle-piece fa-2x text-success mb-2"></i>
-                                <h6>Integra Dati</h6>
-                                <a href="{{ url_for('integrate_data') }}" class="btn btn-success btn-sm">
-                                    Integra
+                                <i class="fas fa-comments fa-2x text-primary mb-2"></i>
+                                <h6>Chat con Gemini</h6>
+                                <a href="{{ url_for('chat_interface') }}" class="btn btn-primary btn-sm">
+                                    Inizia Chat
                                 </a>
                             </div>
                         </div>
@@ -126,91 +126,96 @@
 
 <!-- Dashboard Completa - Con dati -->
 {% elif show_dashboard %}
-<div class="row">
-    <div class="col-12">
-        <h1><i class="fas fa-tachometer-alt"></i> Dashboard</h1>
-        <p class="lead">Panoramica delle operazioni Weaviate</p>
-    </div>
-</div>
-
-<div class="row mt-4">
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header">
-                <h5><i class="fas fa-layer-group"></i> Operazioni Disponibili</h5>
-            </div>
-            <div class="card-body">
-                <div class="d-grid gap-2">
-                    <a href="{{ url_for('question_answering') }}" class="btn btn-primary">
-                        <i class="fas fa-question-circle"></i> Q&A System
-                    </a>
-                    <a href="{{ url_for('analyze_data') }}" class="btn btn-success">
-                        <i class="fas fa-chart-bar"></i> Analisi Dati
-                    </a>
-                    <a href="{{ url_for('clean_data') }}" class="btn btn-warning">
-                        <i class="fas fa-broom"></i> Pulizia Dati
-                    </a>
-                    <a href="{{ url_for('extract_knowledge') }}" class="btn btn-info">
-                        <i class="fas fa-lightbulb"></i> Estrazione Conoscenza
-                    </a>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header">
-                <h5><i class="fas fa-info-circle"></i> Sistema Status</h5>
-            </div>
-            <div class="card-body">
-                <p><i class="fas fa-check-circle text-success"></i> Weaviate Connesso</p>
-                <p><i class="fas fa-database text-success"></i> {{ collections|length }} Collezione/i Attive</p>
-                <p><i class="fas fa-upload text-success"></i> Upload Disponibile</p>
+<div class="text-center py-4">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-lg-10">
+                <h1 class="display-5 mb-2"><i class="fas fa-tachometer-alt"></i> Dashboard</h1>
+                <p class="lead text-muted mb-5">Scegli cosa fare con i tuoi dati</p>
                 
-                <!-- Collezioni più popolate -->
-                {% if collections %}
-                <hr>
-                <h6>Collezioni:</h6>
-                {% for collection in collections[:3] %}
-                <div class="d-flex justify-content-between">
-                    <span>{{ collection.name }}</span>
-                    <span class="badge bg-primary">{{ collection.count }}</span>
+                <!-- Due grandi scelte principali -->
+                <div class="row justify-content-center mb-5">
+                    <div class="col-md-5 mb-4">
+                        <div class="card h-100 border-primary shadow-sm">
+                            <div class="card-body text-center py-5">
+                                <i class="fas fa-upload fa-4x text-primary mb-4"></i>
+                                <h3 class="card-title mb-3">Carica Dati</h3>
+                                <p class="card-text mb-4">Aggiungi nuovi documenti alle tue collezioni per arricchire la base di conoscenza</p>
+                                <a href="{{ url_for('upload_documents') }}" class="btn btn-primary btn-lg">
+                                    <i class="fas fa-plus"></i> Inizia Upload
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-5 mb-4">
+                        <div class="card h-100 border-success shadow-sm">
+                            <div class="card-body text-center py-5">
+                                <i class="fas fa-comments fa-4x text-success mb-4"></i>
+                                <h3 class="card-title mb-3">Chat con Gemini</h3>
+                                <p class="card-text mb-4">Analizza, esplora e fai domande sui tuoi dati usando l'intelligenza artificiale</p>
+                                <a href="{{ url_for('chat_interface') }}" class="btn btn-success btn-lg">
+                                    <i class="fas fa-robot"></i> Inizia Chat
+                                </a>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                {% endfor %}
-                {% endif %}
             </div>
         </div>
     </div>
 </div>
 
-<!-- Quick Actions -->
-<div class="row mt-4">
-    <div class="col-12">
+<!-- Status del Sistema -->
+<div class="row justify-content-center">
+    <div class="col-lg-8">
         <div class="card border-0 bg-light">
             <div class="card-body">
-                <h6 class="card-title"><i class="fas fa-rocket"></i> Azioni Rapide</h6>
-                <div class="row">
-                    <div class="col-md-3">
-                        <a href="{{ url_for('upload_documents') }}" class="btn btn-outline-primary btn-sm w-100">
-                            <i class="fas fa-plus"></i> Aggiungi Documenti
-                        </a>
+                <h5 class="text-center mb-4"><i class="fas fa-info-circle"></i> Status del Sistema</h5>
+                <div class="row text-center">
+                    <div class="col-md-4">
+                        <p class="mb-2"><i class="fas fa-check-circle text-success"></i> <strong>Weaviate</strong></p>
+                        <small class="text-muted">Connesso</small>
                     </div>
-                    <div class="col-md-3">
-                        <a href="{{ url_for('question_answering') }}" class="btn btn-outline-success btn-sm w-100">
-                            <i class="fas fa-search"></i> Cerca/Chiedi
-                        </a>
+                    <div class="col-md-4">
+                        <p class="mb-2"><i class="fas fa-database text-success"></i> <strong>{{ collections|length }} Collezioni</strong></p>
+                        <small class="text-muted">Attive</small>
                     </div>
-                    <div class="col-md-3">
-                        <a href="{{ url_for('analyze_data') }}" class="btn btn-outline-info btn-sm w-100">
-                            <i class="fas fa-chart-pie"></i> Analizza
-                        </a>
-                    </div>
-                    <div class="col-md-3">
-                        <a href="{{ url_for('manage_collections') }}" class="btn btn-outline-secondary btn-sm w-100">
-                            <i class="fas fa-cogs"></i> Gestisci
-                        </a>
+                    <div class="col-md-4">
+                        <p class="mb-2"><i class="fas fa-robot text-success"></i> <strong>Gemini AI</strong></p>
+                        <small class="text-muted">Disponibile</small>
                     </div>
                 </div>
+                
+                <!-- Dettagli collezioni se presenti -->
+                {% if collections %}
+                <hr class="mt-4 mb-3">
+                <div class="row">
+                    <div class="col-12">
+                        <h6 class="text-center mb-3">Collezioni Disponibili:</h6>
+                        <div class="row justify-content-center">
+                            {% for collection in collections[:4] %}
+                            <div class="col-md-3 col-6 mb-2">
+                                <div class="text-center">
+                                    <span class="badge bg-primary rounded-pill">{{ collection.name }}</span>
+                                    <br>
+                                    <small class="text-muted">{{ collection.count }} doc</small>
+                                </div>
+                            </div>
+                            {% endfor %}
+                            {% if collections|length > 4 %}
+                            <div class="col-md-3 col-6 mb-2">
+                                <div class="text-center">
+                                    <a href="{{ url_for('manage_collections') }}" class="btn btn-outline-secondary btn-sm">
+                                        +{{ collections|length - 4 }} altre
+                                    </a>
+                                </div>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
             </div>
         </div>
     </div>

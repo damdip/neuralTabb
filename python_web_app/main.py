@@ -8,7 +8,7 @@ from datetime import datetime
 import traceback
 
 # Import dei moduli personalizzati
-from python_web_app.modules import QASystem, DataAnalyzer, DataCleaner, DataIntegrator, KnowledgeExtractor, WeaviateManager, QASystemWithGemini
+from modules import WeaviateManager, QASystemWithGemini
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-this'
@@ -22,13 +22,6 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 try:
     client = weaviate.connect_to_local()
     weaviate_manager = WeaviateManager(client)
-    
-    # Inizializza i sistemi
-    qa_system = QASystem(client)
-    analyzer = DataAnalyzer(client)
-    cleaner = DataCleaner(client)
-    integrator = DataIntegrator(client)
-    extractor = KnowledgeExtractor(client)
     
     # Inizializza il sistema QA con Gemini
     try:
@@ -189,8 +182,8 @@ def question_answering():
                                      collections=collections,
                                      limit=limit)
             
-            # Usa il sistema QA per ottenere i documenti
-            answer = qa_system.ask_question(question, collection_name, limit)
+            # Usa il sistema QA con Gemini per ottenere i documenti
+            answer = qa_gemini.ask_question(question, collection_name, limit) if qa_gemini else {"error": "Sistema QA non disponibile"}
             
             # Log della risposta per debug
             print(f"Documenti trovati: {answer.get('total_found', 0)}")
@@ -215,283 +208,56 @@ def question_answering():
 
 @app.route('/analyze', methods=['GET', 'POST'])
 def analyze_data():
-    """Analisi dei dati"""
+    """Analisi dei dati tramite sistema QA Gemini"""
     if not client:
         return render_template('error.html', error="Connessione Weaviate non disponibile")
     
-    # Ottieni le collezioni disponibili
-    try:
-        collections = weaviate_manager.list_collections()
-    except Exception as e:
-        print(f"Errore nel recuperare collezioni: {e}")
-        collections = []
+    if not qa_gemini:
+        return render_template('error.html', error="Sistema QA con Gemini non disponibile")
     
-    if not collections:
-        return render_template('error.html', error="Nessuna collezione disponibile per l'analisi")
-    
-    collection = None
-    
-    if request.method == 'GET':
-        # GET: ottieni la collezione dai parametri URL
-        collection = request.args.get('collection')
-        print(f"GET request - collection parameter: {collection}")
-        
-        if not collection:
-            # Se non è specificata una collezione, mostra il form di selezione
-            print("Mostrando form di selezione collezione")
-            return render_template('analize.html', 
-                                 collections=collections, 
-                                 show_selection=True,
-                                 show_results=False)
-    else:
-        # POST: ottieni la collezione dal form
-        collection = request.form.get('collection')
-        print(f"POST request - collection from form: {collection}")
-        
-        if not collection:
-            flash('Seleziona una collezione')
-            return render_template('analize.html', 
-                                 collections=collections, 
-                                 show_selection=True,
-                                 show_results=False)
-    
-    # A questo punto abbiamo una collezione specificata
-    try:
-        # Verifica che la collezione esista
-        collection_names = [col.get('name') for col in collections]
-        
-        if collection not in collection_names:
-            flash(f'Collezione "{collection}" non trovata')
-            return render_template('analize.html', 
-                                 collections=collections, 
-                                 show_selection=True,
-                                 show_results=False)
-        
-        print(f"Analizzando collezione: {collection}")
-        
-        # Analisi completa con gestione errori individuali
-        analysis_result = {
-            'collection_name': collection,
-            'timestamp': datetime.now().isoformat(),
-            'collections': collections,
-        }
-        
-        # Statistiche base
-        try:
-            stats = analyzer.get_basic_stats(collection)
-            analysis_result['stats'] = stats
-        except Exception as e:
-            print(f"Errore get_basic_stats: {e}")
-            analysis_result['stats'] = {'error': str(e)}
-        
-        # Analisi cluster (riduciamo il numero di cluster per dataset più piccoli)
-        try:
-            clusters = analyzer.analyze_clusters(collection, n_clusters=3)
-            analysis_result['clusters'] = clusters
-        except Exception as e:
-            print(f"Errore analyze_clusters: {e}")
-            analysis_result['clusters'] = {'error': str(e)}
-        
-        # Estrazione topic (riduciamo il numero di topic)
-        try:
-            topics = analyzer.extract_topics(collection, n_topics=3)
-            analysis_result['topics'] = topics
-        except Exception as e:
-            print(f"Errore extract_topics: {e}")
-            analysis_result['topics'] = {'error': str(e)}
-        
-        return render_template('analize.html', 
-                             analysis=analysis_result,
-                             collections=collections,
-                             show_selection=False,
-                             show_results=True)
-        
-    except Exception as e:
-        print(f"Errore generale in analyze_data: {e}")
-        print(f"Traceback: {traceback.format_exc()}")
-        return render_template('error.html', error=f"Errore durante l'analisi: {str(e)}")
+    # Reindirizza alla chat per l'analisi interattiva
+    return redirect(url_for('chat_interface'))
 
 @app.route('/clean', methods=['GET', 'POST'])
 def clean_data():
-    """Pulizia dei dati"""
-    if request.method == 'POST':
-        try:
-            action = request.form.get('action')
-            collection = request.form.get('collection', 'Documents')
-            
-            if action == 'find_duplicates':
-                threshold = float(request.form.get('threshold', 0.95))
-                duplicates = cleaner.find_duplicates(collection, threshold)
-                return render_template('clean.html', duplicates=duplicates)
-                
-            elif action == 'remove_low_quality':
-                removed_count = cleaner.remove_low_quality_content(collection)
-                flash(f'Rimossi {removed_count} documenti di bassa qualità')
-                
-            elif action == 'remove_duplicates':
-                duplicate_ids = request.form.getlist('duplicate_ids')
-                removed_count = cleaner.remove_duplicates(duplicate_ids)
-                flash(f'Rimossi {removed_count} duplicati')
-                
-            return redirect(url_for('clean_data'))
-            
-        except Exception as e:
-            flash(f'Errore: {str(e)}')
+    """Pulizia dei dati tramite sistema QA Gemini"""
+    if not client:
+        return render_template('error.html', error="Connessione Weaviate non disponibile")
     
-    return render_template('clean.html')
+    if not qa_gemini:
+        return render_template('error.html', error="Sistema QA con Gemini non disponibile")
+    
+    # Reindirizza alla chat per operazioni di pulizia interattive
+    return redirect(url_for('chat_interface'))
 
 @app.route('/integrate', methods=['GET', 'POST'])
 def integrate_data():
     """Integrazione dati esterni"""
-    if request.method == 'POST':
-        try:
-            if 'file' in request.files:
-                file = request.files['file']
-                if file.filename:
-                    filename = secure_filename(file.filename)
-                    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-                    file.save(filepath)
-                    
-                    result = integrator.integrate_external_file(filepath)
-                    flash(f'Integrati {result["integrated"]} nuovi documenti')
-                    
-                    os.remove(filepath)
-            
-            elif 'api_url' in request.form:
-                api_url = request.form.get('api_url')
-                result = integrator.integrate_from_api(api_url)
-                flash(f'Integrati {result["integrated"]} documenti da API')
-                
-            return redirect(url_for('integrate_data'))
-            
-        except Exception as e:
-            flash(f'Errore: {str(e)}')
-    
-    return render_template('integrate.html')
+    # Funzione semplificata - solo upload normale tramite il sistema esistente
+    flash('Per l\'integrazione dati, utilizza la funzione di upload standard')
+    return redirect(url_for('upload_documents'))
 
 @app.route('/extract', methods=['GET', 'POST'])
 def extract_knowledge():
-    """Estrazione conoscenza"""
+    """Estrazione conoscenza tramite sistema QA Gemini"""
     if not client:
         return render_template('error.html', error="Connessione Weaviate non disponibile")
     
-    # Ottieni le collezioni disponibili
-    try:
-        collections = weaviate_manager.list_collections()
-    except Exception as e:
-        print(f"Errore nel recuperare collezioni: {e}")
-        collections = []
+    if not qa_gemini:
+        return render_template('error.html', error="Sistema QA con Gemini non disponibile")
     
-    if not collections:
-        return render_template('error.html', error="Nessuna collezione disponibile per l'estrazione")
-    
-    collection = None
-    
-    if request.method == 'GET':
-        # GET: ottieni la collezione dai parametri URL
-        collection = request.args.get('collection')
-        print(f"GET request - collection parameter: {collection}")
-        
-        if not collection:
-            # Se non è specificata una collezione, mostra il form di selezione
-            print("Mostrando form di selezione collezione per estrazione")
-            return render_template('extract.html', 
-                                 collections=collections, 
-                                 show_selection=True,
-                                 show_results=False)
-    else:
-        # POST: ottieni la collezione dal form
-        collection = request.form.get('collection')
-        print(f"POST request - collection from form: {collection}")
-        
-        if not collection:
-            flash('Seleziona una collezione')
-            return render_template('extract.html', 
-                                 collections=collections, 
-                                 show_selection=True,
-                                 show_results=False)
-    
-    # A questo punto abbiamo una collezione specificata
-    try:
-        # Verifica che la collezione esista
-        collection_names = [col.get('name') for col in collections]
-        
-        if collection not in collection_names:
-            flash(f'Collezione "{collection}" non trovata')
-            return render_template('extract.html', 
-                                 collections=collections, 
-                                 show_selection=True,
-                                 show_results=False)
-        
-        print(f"Estraendo conoscenza dalla collezione: {collection}")
-        
-        extraction_result = {
-            'collection_name': collection,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        # Estrazione entità
-        try:
-            entities = extractor.extract_entities(collection)
-            extraction_result['entities'] = entities
-        except Exception as e:
-            print(f"Errore extract_entities: {e}")
-            extraction_result['entities'] = {'error': str(e)}
-        
-        # Topic modeling
-        try:
-            topics = extractor.extract_topics(collection)
-            extraction_result['topics'] = topics
-        except Exception as e:
-            print(f"Errore extract_topics: {e}")
-            extraction_result['topics'] = {'error': str(e)}
-        
-        # Keyword extraction
-        try:
-            keywords = extractor.extract_keywords(collection)
-            extraction_result['keywords'] = keywords
-        except Exception as e:
-            print(f"Errore extract_keywords: {e}")
-            extraction_result['keywords'] = {'error': str(e)}
-        
-        return render_template('extract.html', 
-                             extraction=extraction_result,
-                             collections=collections,
-                             show_selection=False,
-                             show_results=True)
-        
-    except Exception as e:
-        print(f"Errore generale in extract_knowledge: {e}")
-        print(f"Traceback: {traceback.format_exc()}")
-        return render_template('error.html', error=f"Errore durante l'estrazione: {str(e)}")
+    # Reindirizza alla chat per l'estrazione di conoscenza interattiva
+    return redirect(url_for('chat_interface'))
 
 @app.route('/api/search')
 def api_search():
-    """API endpoint per ricerca"""
-    try:
-        query = request.args.get('q')
-        collection = request.args.get('collection', 'Documents')
-        limit = int(request.args.get('limit', 10))
-        
-        if not query:
-            return jsonify({'error': 'Query richiesta'}), 400
-        
-        results = qa_system.search_documents(query, collection, limit)
-        return jsonify(results)
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    """API endpoint per ricerca - deprecata, usa /chat/ask"""
+    return jsonify({'error': 'API deprecata, usa /chat/ask'}), 410
 
 @app.route('/api/stats')
 def api_stats():
-    """API endpoint per statistiche"""
-    try:
-        collection = request.args.get('collection', 'Documents')
-        stats = analyzer.get_basic_stats(collection)
-        return jsonify(stats)
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    """API endpoint per statistiche - deprecata, usa il sistema QA Gemini"""
+    return jsonify({'error': 'API deprecata, usa il sistema QA Gemini per statistiche'}), 410
 
 @app.route('/collections')
 def manage_collections():
