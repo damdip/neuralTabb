@@ -1,8 +1,9 @@
+pipeline domanda analitica:
+                            ---->
+                          |
 
-Books_data :
-    1) annotare il cleaning più generale e mantenerlo per l'applicazione
-
-
-
-
-Provare ad Integrare il tutto con l'applicazione web
+comprensione tipo domanda - >  domanda analitica: quanti elementi recuperare?   
+                                                    quali sono le entità coinvolte ? 
+                                                    quali sono le operazioni che vogliamo fare?
+                                                    traduzione dal
+                                            

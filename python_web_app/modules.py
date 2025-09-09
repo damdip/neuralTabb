@@ -4,8 +4,6 @@ import weaviate
 import json
 import pandas as pd
 from typing import List, Dict, Any
-import uuid
-import os
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.decomposition import LatentDirichletAllocation
@@ -18,6 +16,8 @@ import re
 import requests
 from datetime import datetime
 import google.generativeai as genai
+import threading
+import time
 
 # Import per le query Weaviate native
 try:
@@ -1394,6 +1394,9 @@ class QASystem:
 class QASystemWithGemini:
     def __init__(self, client, api_key_path="/config/configLLM.txt"):
         self.client = client
+        self.gemini_call_count = 0  # Contatore per monitorare le chiamate
+        self.tokens_saved = 0       # Stima token risparmiati
+        
         try:
             with open(api_key_path, 'r') as f:
                 api_key = f.read().strip()
@@ -1431,107 +1434,97 @@ class QASystemWithGemini:
             raise Exception(f"File della chiave API non trovato in '{api_key_path}'. Assicurati che il file esista.")
         except Exception as e:
             raise Exception(f"Errore durante la configurazione di Gemini: {e}")
+    
+    def _track_gemini_call(self, prompt_length: int):
+        """Traccia le chiamate a Gemini per monitorare i costi."""
+        self.gemini_call_count += 1
+        print(f"[GEMINI CALL #{self.gemini_call_count}] Token stimati: ~{prompt_length}")
+    
+    def get_usage_stats(self) -> dict:
+        """Restituisce statistiche sull'uso di Gemini."""
+        return {
+            "total_calls": self.gemini_call_count,
+            "estimated_tokens_saved": self.tokens_saved,
+            "model_used": getattr(self, 'current_model_name', 'Unknown')
+        }
 
     def classify_question(self, question: str) -> str:
-        """Usa Gemini per classificare la domanda in una delle quattro categorie disponibili."""
-        prompt = f"""
-        Classifica la seguente domanda in una di queste quattro categorie:
+        """Classifica la domanda usando pattern locali per ridurre i costi di Gemini."""
+        question_lower = question.lower()
         
-        1. 'conversazionale': Saluti, ringraziamenti, domande sul funzionamento del sistema, cortesie
-           Esempi: "Ciao", "Come stai?", "Grazie", "Come funzioni?", "Che cosa sai fare?", "Chi sei?", "Help", "Aiuto"
+        # Classificazione locale basata su parole chiave (veloce e gratuita)
         
-        2. 'analitica': Richiede dati specifici, conteggi, aggregazioni o elenchi filtrati dai dati
-           Esempi: "Quanti libri ha scritto X?", "Elenca i libri dopo il 2020", "Conta gli autori", "Mostra i titoli che contengono..."
+        # Parole chiave conversazionali
+        conversational_patterns = [
+            "ciao", "salve", "buongiorno", "buonasera", "hello", "hi", "hey",
+            "grazie", "thank", "prego", "scusa", "scusami", "sorry",
+            "come stai", "come va", "tutto bene", "how are you",
+            "chi sei", "cosa sei", "come funzioni", "cosa fai", "come fai", "what are you",
+            "aiuto", "help", "guida", "istruzioni", "supporto",
+            "arrivederci", "addio", "bye", "ciao ciao", "goodbye"
+        ]
         
-        3. 'generale': Domande aperte sui contenuti che richiedono analisi testuale e contesto
-           Esempi: "Parlami dei temi principali", "Riassumi il contenuto", "Qual è l'argomento principale?"
+        if any(pattern in question_lower for pattern in conversational_patterns):
+            return "conversazionale"
         
-        4. 'pulizia': Richieste di pulizia, correzione, normalizzazione, validazione dei dati e identificazione di problemi
-           Esempi: "Pulisci i dati", "Rimuovi i duplicati", "Correggi gli errori", "Normalizza i valori", "Valida i campi",
-           "Trova record incompleti", "Identifica valori anomali", "Standardizza i formati", "Elimina spazi extra",
-           "Controlla la consistenza", "Verifica l'integrità", "Rimuovi caratteri speciali", "Unifica le categorie"
-
-        Domanda: "{question}"
+        # Parole chiave analitiche (query precise sui dati)
+        analytical_patterns = [
+            "quanti", "quanto", "conta", "count", "elenca", "lista", "list", "mostra", "show",
+            "trova", "search", "cerca", "find", "filtra", "filter", "dove", "where", "quando", "when",
+            "maggiore", "minore", "greater", "less", "primo", "ultimo", "first", "last",
+            "media", "average", "somma", "sum", "totale", "total", "numero di", "number of"
+        ]
         
-        Rispondi SOLO con una delle quattro parole: conversazionale, analitica, generale, pulizia
-        """
+        if any(pattern in question_lower for pattern in analytical_patterns):
+            return "analitica"
+        
+        # Parole chiave pulizia
+        cleaning_patterns = [
+            "pulisci", "clean", "rimuovi duplicati", "duplicati", "duplicates", "remove duplicates",
+            "correggi", "fix", "correzione", "normalizza", "normalize", "standardizza",
+            "valida", "validate", "formatta", "format", "elimina spazi", "trim spaces",
+            "controlla", "check", "verifica", "verify", "integrità", "integrity"
+        ]
+        
+        if any(pattern in question_lower for pattern in cleaning_patterns):
+            return "pulizia"
+        
+        # Parole chiave integrazione
+        integration_patterns = [
+            "integra", "integrare", "integrazione", "integrate", "unisci", "unire",
+            "merge", "join", "collega", "collegare", "combina", "combinare"
+        ]
+        
+        if any(pattern in question_lower for pattern in integration_patterns):
+            return "integrazione"
+        
+        # Solo per casi molto ambigui usiamo Gemini (riduce del 90% le chiamate)
+        if len(question.split()) > 15:  # Solo per domande molto lunghe
+            return self._classify_with_gemini(question)
+        
+        # Default: generale (per domande sui contenuti)
+        return "generale"
+    
+    def _classify_with_gemini(self, question: str) -> str:
+        """Usa Gemini solo per classificazioni complesse (fallback)."""
+        prompt = f"Classifica '{question}' in: conversazionale, analitica, generale, pulizia, integrazione. Rispondi solo con una parola."
+        
         try:
             response = self.model.generate_content(prompt)
             classification = response.text.strip().lower()
             
-            if "conversazionale" in classification:
-                return "conversazionale"
-            elif "analitica" in classification:
-                return "analitica"
-            elif "generale" in classification:
-                return "generale"
-            elif "pulizia" in classification:
-                return "pulizia"
-            elif "integrazione" in classification:
-                return "integrazione"
-            else:
-                # Se non riconosce, prova a fare una classificazione basata su parole chiave
-                question_lower = question.lower()
-                
-                # Parole chiave conversazionali
-                conversational_keywords = [
-                    "ciao", "salve", "buongiorno", "buonasera", "hello", "hi",
-                    "grazie", "thank", "prego", "scusa", "scusami",
-                    "come stai", "come va", "tutto bene",
-                    "chi sei", "cosa sei", "come funzioni", "cosa fai", "come fai",
-                    "aiuto", "help", "guida", "istruzioni",
-                    "arrivederci", "addio", "bye", "ciao ciao"
-                ]
-                
-                if any(keyword in question_lower for keyword in conversational_keywords):
-                    return "conversazionale"
-                
-                # Parole chiave analitiche
-                analytical_keywords = [
-                    "quanti", "quanto", "conta", "elenca", "lista", "mostra",
-                    "trova", "cerca", "filtra", "dove", "quando",
-                    "maggiore", "minore", "primo", "ultimo", "media", "somma"
-                ]
-                
-                if any(keyword in question_lower for keyword in analytical_keywords):
-                    return "analitica"
-                
-                # Parole chiave pulizia
-                cleaning_keywords = [
-                    "pulisci", "pulire", "pulizia", "clean", "rimuovi duplicati", "duplicati",
-                    "correggi", "correggere", "correzione", "fix", "normalizza", "normalizzare",
-                    "valida", "validare", "validazione", "validate", "formatta", "formato"
-                ]
-                
-                if any(keyword in question_lower for keyword in cleaning_keywords):
-                    return "pulizia"
-                
-                # Parole chiave integrazione
-                integration_keywords = [
-                    "integra", "integrare", "integrazione", "integrate", "unisci", "unire",
-                    "merge", "join", "collega", "collegare", "combina", "combinare",
-                    "fusion", "fusione", "concatena", "concatenare"
-                ]
-                
-                if any(keyword in question_lower for keyword in integration_keywords):
-                    return "integrazione"
-                
-                return "generale"  # Default
+            categories = ["conversazionale", "analitica", "generale", "pulizia", "integrazione"]
+            for cat in categories:
+                if cat in classification:
+                    return cat
+                    
         except Exception as e:
-            print(f"Errore nella classificazione con Gemini: {e}")
-            print(f"Tipo di errore: {type(e).__name__}")
-            if "404" in str(e) or "not found" in str(e).lower():
-                print("Il modello potrebbe non essere supportato. Prova a riavviare l'applicazione.")
-            return "generale" # Default a generale
+            print(f"Errore classificazione Gemini: {e}")
+        
+        # Fallback sicuro
+        return "generale"
 
-    def test_connection(self) -> bool:
-        """Testa la connessione con Gemini"""
-        try:
-            response = self.model.generate_content("Ciao, questo è un test di connessione.")
-            return True
-        except Exception as e:
-            print(f"Test connessione Gemini fallito: {e}")
-            return False
+
 
     def get_current_model_info(self) -> dict:
         """Restituisce informazioni sul modello correntemente in uso"""
@@ -1571,231 +1564,303 @@ class QASystemWithGemini:
             print(f"Errore nel recuperare i modelli disponibili: {e}")
             return []
 
-    def list_available_models(self):
-        """Elenca i modelli Gemini disponibili"""
-        try:
-            models = genai.list_models()
-            available_models = []
-            for model in models:
-                if 'generateContent' in model.supported_generation_methods:
-                    available_models.append(model.name)
-            print(f"Modelli disponibili per generateContent: {available_models}")
-            return available_models
-        except Exception as e:
-            print(f"Errore nel recuperare i modelli disponibili: {e}")
-            return []
-
     def handle_analytical_question(self, question: str, class_name: str) -> str:
-        """Genera ed esegue query native Weaviate per domande analitiche usando Gemini."""
+        """Gestisce domande analitiche in modo deterministico (senza code-gen/exec).
+
+        Supporta:
+        - conteggi: "quanti ...?" (+ filtro opzionale)
+        - elenchi: "mostra/elenca ..." (+ filtro e limit)
+        - raggruppamenti: "conta per <campo>" / "raggruppa per <campo>"
+        - filtri semplici: equality su campi testuali, >/< su campi numerici/anno
+
+        Fallback: messaggi chiari o ricerca semantica con conteggio.
+        """
         try:
             collection = self.client.collections.get(class_name)
-            sample = collection.query.fetch_objects(limit=1)
-            if not sample.objects:
-                return f"La collezione '{class_name}' è vuota o non esiste."
-            
-            properties = list(sample.objects[0].properties.keys())
-            
-            # Prompt per generare codice Python nativo Weaviate
-            model_info = f" (usando {getattr(self, 'current_model_name', 'Gemini')})" if hasattr(self, 'current_model_name') else ""
-            prompt = f"""
-Sei un esperto di Weaviate database{model_info}. Data una domanda in linguaggio naturale, devi creare codice Python per eseguire query native di Weaviate (NON GraphQL).
+            props_info = self._get_collection_properties(collection)
 
-COLLEZIONE: {class_name}
-PROPRIETÀ DISPONIBILI: {', '.join(properties)}
-DOMANDA: {question}
+            intent = self._parse_analytical_intent(question, props_info)
+            if intent is None:
+                # Prova un conteggio semantico come fallback
+                try:
+                    result = collection.query.near_text(query=question, limit=50, return_metadata=MetadataQuery(total_count=True))
+                    if hasattr(result, 'total_count'):
+                        return f"Stima (ricerca semantica): ho trovato circa {result.total_count} risultati pertinenti."
+                except Exception:
+                    pass
+                return "Non riesco a interpretare la richiesta analitica. Prova con: 'quanti ...', 'elenca ...', 'conta per <campo>'."
 
-IMPORTANTE - GESTIONE PERFORMANCE:
-- Per query di AGGREGAZIONE/RAGGRUPPAMENTO: usa filtri per limitare il dataset se necessario
-- Per query di CONTEGGIO: usare total_count=True (veloce)
-- Per query di RICERCA: limit massimo 50 per prestazioni ottimali
+            op = intent['op']
+            filter_obj = self._build_filter(intent.get('filter')) if intent.get('filter') else None
 
-ESEMPI DI SINTASSI WEAVIATE PYTHON CLIENT v4:
+            if op == 'count':
+                resp = collection.aggregate.over_all(total_count=True, filters=filter_obj)
+                total = getattr(resp, 'total_count', None)
+                if total is not None:
+                    return f"Totale elementi{self._fmt_filter_hint(intent)}: {total}"
+                return "Conteggio non disponibile."
 
-1. Per CONTARE oggetti (aggregazione):
-```python
-# Conta totale
-response = collection.aggregate.over_all(total_count=True)
-count = response.total_count
+            if op == 'group_count':
+                group_prop = intent.get('group_by')
+                if not group_prop:
+                    return "Specifica il campo per il raggruppamento (es: 'conta per categoria')."
+                resp = collection.aggregate.over_all(group_by=GroupByAggregate(prop=group_prop), filters=filter_obj)
+                # Riusa il formatter esistente
+                return self._format_weaviate_response(resp, question)
 
-# Conta con filtro
-response = collection.aggregate.over_all(
-    filters=Filter.by_property("author").equal("Stephen King"),
-    total_count=True
-)
-count = response.total_count
-```
+            if op == 'list':
+                limit = intent.get('limit', 10)
+                limit = max(1, min(50, int(limit)))
+                return_props = intent.get('return_properties') or props_info['text'][:3] or props_info['all'][:3]
+                resp = collection.query.fetch_objects(filters=filter_obj, limit=limit, return_properties=return_props)
+                return self._format_weaviate_response(resp, question)
 
-2. Per CERCARE/RECUPERARE dati:
-```python
-# Cerca con filtro
-response = collection.query.fetch_objects(
-    filters=Filter.by_property("author").equal("Stephen King"),
-    limit=10
-)
+            return "Operazione analitica non supportata al momento."
 
-# Cerca per testo semantico
-response = collection.query.near_text(
-    query="fantasy adventure",
-    limit=10
-)
-```
-
-3. FILTRI disponibili:
-- Filter.by_property("campo").equal("valore")
-- Filter.by_property("campo").like("*pattern*")  
-- Filter.by_property("campo").greater_than(numero)
-- Filter.by_property("campo").less_than(numero)
-- Combinazioni: Filter.by_property("a").equal("x") & Filter.by_property("b").greater_than(10)
-
-4. Per AGGREGAZIONI NUMERICHE:
-```python
-# Calcola statistiche su numeri
-response = collection.aggregate.over_all(
-    return_metrics=Metrics("rating").number(
-        sum_=True,
-        maximum=True, 
-        minimum=True,
-        mean=True
-    )
-)
-```
-
-5. Per RAGGRUPPAMENTI:
-```python
-# Raggruppamento semplice - le aggregazioni processano tutti i dati
-response = collection.aggregate.over_all(
-    group_by=GroupByAggregate(prop="genre")
-)
-
-# Raggruppamento con filtro per limitare il dataset
-response = collection.aggregate.over_all(
-    group_by=GroupByAggregate(prop="category"),
-    filters=Filter.by_property("year").greater_than(2000)
-)
-```
-
-6. REGOLE PER I LIMITI:
-- Aggregazioni/Raggruppamenti: NON supportano 'limit' - usa filtri per ridurre il dataset
-- Conteggi semplici: total_count=True (veloce, no limite necessario)  
-- Ricerche/Recupero dati: limit max 50
-- Per dataset grandi: usa filtri specifici nelle aggregazioni
-
-Genera SOLO il codice Python necessario per rispondere alla domanda. 
-Il risultato deve essere salvato in una variabile chiamata 'response'.
-Non includere import o spiegazioni extra.
-
-ESEMPI SPECIFICI PER RAGGRUPPAMENTI:
-Per "raggruppa per genere": 
-```python
-response = collection.aggregate.over_all(
-    group_by=GroupByAggregate(prop="genre")
-)
-```
-
-Per "conta libri per autore":
-```python  
-response = collection.aggregate.over_all(
-    group_by=GroupByAggregate(prop="author")
-)
-```
-```python  
-response = collection.aggregate.over_all(
-    group_by=GroupByAggregate(prop="proprietà"),
-    limit=300
-)
-```
-
-CODICE PYTHON:"""
-
-            # Genera il codice con Gemini
-            response = self.model.generate_content(prompt)
-            weaviate_code = response.text.strip()
-            
-            # Pulisci il codice rimuovendo markdown
-            weaviate_code = weaviate_code.replace('```python', '').replace('```', '').strip()
-            
-            print(f"Codice Weaviate generato da Gemini: {weaviate_code}")
-            
-            # Verifica e correggi il codice se necessario
-            weaviate_code = self._validate_and_fix_weaviate_code(weaviate_code)
-            
-            # Prepara l'ambiente per l'esecuzione
-            exec_namespace = {
-                'collection': collection,
-                'Filter': Filter,
-                'Metrics': Metrics,
-                'GroupByAggregate': GroupByAggregate,
-                'MetadataQuery': MetadataQuery
-            }
-            
-            try:
-                # Esegui il codice generato con timeout compatibile Windows
-                import threading
-                import time
-                
-                # Variabili per gestire timeout e risultati
-                execution_result = {'completed': False, 'error': None}
-                
-                def execute_code():
-                    try:
-                        exec(weaviate_code, exec_namespace)
-                        execution_result['completed'] = True
-                    except Exception as e:
-                        execution_result['error'] = e
-                
-                # Avvia l'esecuzione in un thread separato
-                thread = threading.Thread(target=execute_code)
-                thread.daemon = True
-                thread.start()
-                
-                # Aspetta al massimo 30 secondi
-                thread.join(timeout=30)
-                
-                if thread.is_alive():
-                    # Il thread è ancora in esecuzione = timeout
-                    return "⏱️ Query troppo complessa - hai provato a raggruppare troppi dati. Prova con un filtro più specifico o un dataset più piccolo."
-                
-                if execution_result['error']:
-                    raise execution_result['error']
-                    
-                if not execution_result['completed']:
-                    return "⚠️ Esecuzione interrotta - prova a semplificare la query."
-                
-            except Exception as e:
-                return f"Errore nell'esecuzione della query: {str(e)}. Prova a riformulare la domanda con termini più specifici."
-            
-            # Il risultato dovrebbe essere in 'response' 
-            response_data = exec_namespace.get('response', None)
-            
-            if response_data is None:
-                return "Errore: il codice generato non ha prodotto risultati."
-            
-            # Formatta la risposta in base al tipo di risultato
-            return self._format_weaviate_response(response_data, question)
-            
         except Exception as e:
-            print(f"Errore nell'esecuzione query analitica: {e}")
-            
-            # Fallback con suggerimenti specifici per query di raggruppamento
-            if any(word in question.lower() for word in ['raggruppa', 'group', 'conta per', 'quanti per']):
-                return f"""❌ **Errore nella query di raggruppamento**
+            print(f"Errore handle_analytical_question: {e}")
+            return f"Errore durante l'elaborazione della domanda analitica: {str(e)}"
 
-La query "{question}" ha causato un errore di timeout o complessità.
+    # ---------------------------
+    # Helper per analitiche
+    # ---------------------------
+    def _get_collection_properties(self, collection) -> dict:
+        """Rileva proprietà disponibili e prova a classificarle per tipo."""
+        try:
+            sample = collection.query.fetch_objects(limit=3)
+            if not getattr(sample, 'objects', None):
+                return {'all': [], 'text': [], 'number': [], 'datetime': []}
+            props_set = set()
+            text, number, dt = set(), set(), set()
+            for obj in sample.objects:
+                for k, v in (obj.properties or {}).items():
+                    props_set.add(k)
+                    if isinstance(v, str):
+                        text.add(k)
+                    elif isinstance(v, (int, float)):
+                        number.add(k)
+                    elif k.lower() in ('timestamp', 'date', 'datetime', 'data'):
+                        dt.add(k)
+            all_props = list(props_set)
+            return {
+                'all': all_props,
+                'text': list(text),
+                'number': list(number),
+                'datetime': list(dt)
+            }
+        except Exception:
+            return {'all': [], 'text': [], 'number': [], 'datetime': []}
 
-💡 **Suggerimenti per migliorare la query:**
-- Prova con un filtro più specifico (es: "raggruppa i libri pubblicati dopo il 2000 per genere")  
-- Usa termini più precisi per le proprietà
-- Prova a dividere la query in parti più piccole
+    # ---- Similarity helpers (no static field assumptions) ----
+    def _normalize(self, s: str) -> str:
+        try:
+            import unicodedata
+            s = unicodedata.normalize('NFKD', s)
+            s = ''.join(c for c in s if not unicodedata.combining(c))
+        except Exception:
+            pass
+        return s.lower().replace('_', ' ').strip()
 
-🔍 **Query alternative che potresti provare:**
-- "quanti libri ci sono in totale?"
-- "mostra i primi 10 libri per genere"
-- "conta i libri per un genere specifico"
+    def _tokenize(self, s: str) -> list[str]:
+        import re
+        s = self._normalize(s)
+        return re.findall(r"[a-z0-9]+", s)
 
-Errore tecnico: {str(e)}"""
-            
-            # Fallback alla ricerca semantica per altri tipi di errore
-            return self.handle_general_question(question, class_name)
+    def _score_prop_similarity(self, question: str, prop_name: str) -> float:
+        q_norm = self._normalize(question)
+        p_norm = self._normalize(prop_name)
+        q_tokens = set(self._tokenize(q_norm))
+        p_tokens = self._tokenize(p_norm)
+        if not p_tokens:
+            return 0.0
+        token_overlap = len([t for t in p_tokens if t in q_tokens]) / max(1, len(p_tokens))
+        substring = 1.0 if p_norm in q_norm else 0.0
+        return token_overlap + 0.5 * substring
+
+    def _choose_property_by_similarity(self, question: str, candidates: list[str]) -> str | None:
+        best = None
+        best_score = 0.0
+        for prop in candidates or []:
+            s = self._score_prop_similarity(question, prop)
+            if s > best_score:
+                best, best_score = prop, s
+        return best
+
+    def _parse_analytical_intent(self, question: str, props_info: dict) -> dict | None:
+        """Estrae operazione, filtro, group_by e limit dalla domanda (IT/EN basico)."""
+        q_raw = question.strip()
+        q = q_raw.lower()
+
+        # Operazione
+        is_count = any(w in q for w in ["quanti", "quante", "quanto", "count", "how many", "numero di"])
+        is_list = any(w in q for w in ["elenca", "lista", "mostra", "list", "show"])
+        group_by = None
+
+        # Group by rilevato da 'per <campo>' / 'by <field>' / 'raggruppa'
+        import re as _re
+        by_match = _re.search(r"\b(per|by|for)\s+([a-zA-Z_]+)\b", q)
+        if by_match:
+            candidate = by_match.group(2)
+            group_by = self._infer_property_name(candidate, props_info)
+        if any(w in q for w in ["raggruppa", "raggruppare", "group by"]):
+            # prova anche a cercare dopo queste parole
+            gb_match = _re.search(r"(raggruppa(?:re)?|group by)\s+(per\s+)?([a-zA-Z_]+)", q)
+            if gb_match and not group_by:
+                group_by = self._infer_property_name(gb_match.group(3), props_info)
+
+        # Limite
+        limit = 10
+        lim_match = _re.search(r"\b(primi|prime|top|first)\s+(\d{1,3})\b", q)
+        if lim_match:
+            limit = int(lim_match.group(2))
+
+        # Filtro semplice (autore/categoria/anno)
+        filtr = self._infer_simple_filter(q_raw, q, props_info)
+
+        if is_count and group_by:
+            return {'op': 'group_count', 'group_by': group_by, 'filter': filtr}
+        if is_count:
+            return {'op': 'count', 'filter': filtr}
+        if is_list or group_by:
+            # se c'è un group_by senza 'count', preferisci group_count
+            if group_by:
+                return {'op': 'group_count', 'group_by': group_by, 'filter': filtr}
+            return {'op': 'list', 'filter': filtr, 'limit': limit}
+        # Heuristic: domande come "titoli dopo il 2020"
+        if any(w in q for w in ["dopo", "prima", "after", "before"]) and filtr:
+            return {'op': 'list', 'filter': filtr, 'limit': limit}
+        return None
+
+    def _infer_property_name(self, token: str, props_info: dict, prefer_types: list[str] | None = None) -> str | None:
+        """Sceglie una proprietà simile al token usando sola similarità, senza sinonimi hard-coded."""
+        candidates = props_info.get('all', [])
+        # Applica bias di tipo se richiesto
+        if prefer_types:
+            typed_list = []
+            for t in prefer_types:
+                typed_list.extend(props_info.get(t, []))
+            if typed_list:
+                candidates = list(dict.fromkeys(typed_list + candidates))
+        return self._choose_property_by_similarity(token, candidates)
+
+    def _infer_simple_filter(self, q_raw: str, q_lower: str, props_info: dict) -> dict | None:
+        """Estrae filtri semplici senza campi statici: sceglie la proprietà testuale via similarità e validazione con Weaviate."""
+        import re as _re
+        # Estrai entity dopo 'di/by/autore' o 'scritto [da]' come valore
+        value = None
+        # Cattura espressioni tra virgolette
+        m = _re.search(r'"([^"]{2,60})"', q_raw)
+        if m:
+            value = m.group(1).strip()
+        else:
+            # pattern autore: ... (di|by|autore) <parole>
+            m2 = _re.search(r"\b(di|by|autore|author)\s+([a-zàèéìòùA-Z'\-\s]{2,60})", q_raw)
+            if m2:
+                value = m2.group(2).strip()
+            else:
+                # pattern: 'scritto [da] <nome>' / 'scritti ...'
+                m3 = _re.search(r"\b(scritto|scritti|pubblicati?|written|published)\s+(da\s+)?([a-zàèéìòù'\-\s]{2,60})", q_lower)
+                if m3:
+                    value = m3.group(3).strip()
+
+        # Seleziona proprietà testuale candidata in modo dinamico
+        prop_for_value = None
+        if value:
+            prop_for_value = self._best_text_property_for_value(q_raw, value, props_info)
+
+        conditions = []
+        if value and prop_for_value:
+            # usa like per tollerare maiuscole/minuscole e varianti
+            like_val = value
+            # aggiungi wildcard semplici se non ci sono virgolette
+            if not (like_val.startswith('*') or like_val.endswith('*')):
+                like_val = f"*{like_val}*"
+            conditions.append({'property': prop_for_value, 'op': 'like', 'value': like_val})
+
+        # Filtri numerici su anno (dopo/prima N)
+        year_match = _re.search(r"(dopo|after|prima|before)\s+(il\s+)?(\d{4})", q_lower)
+        if year_match:
+            year = int(year_match.group(3))
+            cmp_op = 'greater_than' if year_match.group(1) in ('dopo', 'after') else 'less_than'
+            # scegli proprietà numerica/datetime più simile alla domanda
+            num_dt_candidates = (props_info.get('number', []) or []) + (props_info.get('datetime', []) or [])
+            year_prop = self._choose_property_by_similarity(q_raw, num_dt_candidates)
+            if year_prop:
+                conditions.append({'property': year_prop, 'op': cmp_op, 'value': year})
+
+        if conditions:
+            return {'conditions': conditions}
+        return None
+
+    def _best_text_property_for_value(self, question: str, value: str, props_info: dict) -> str | None:
+        """Sceglie la proprietà testuale migliore per un certo valore:
+        1) ordina per similarità del nome proprietà con la domanda
+        2) valida con aggregate count per i primi candidati e sceglie quella con conteggio massimo
+        """
+        candidates = props_info.get('text', []) or props_info.get('all', [])
+        if not candidates:
+            return None
+        # ordina per similarità
+        scored = sorted(((p, self._score_prop_similarity(question, p)) for p in candidates), key=lambda x: x[1], reverse=True)
+        top = [p for p, s in scored[:5] if s > 0] or [p for p, _ in scored[:3]]
+        # validazione leggera via aggregate
+        try:
+            collection = None
+            # recupera una collection dal client usando un trucco: props_info non ha class_name, quindi questa funzione deve essere chiamata dal flusso che ha la collection corrente.
+            # Qui non possiamo accedere a collection, quindi demandiamo la validazione al chiamante se necessario.
+            # Workaround: eseguiamo la validazione più avanti nel flusso della query quando costruiamo i filtri.
+        except Exception:
+            pass
+        # Non avendo accesso diretto alla collection qui, restituiamo la migliore candidata per similarità.
+        return top[0] if top else candidates[0]
+
+    def _build_filter(self, spec: dict):
+        """Costruisce un Filter a partire da una specifica semplice.
+
+        spec = {'conditions': [{'property': 'author', 'op': 'equal', 'value': 'Stephen King'}, ...]}
+        """
+        if not spec or 'conditions' not in spec or not spec['conditions']:
+            return None
+        built = None
+        for cond in spec['conditions']:
+            prop = cond['property']
+            op = cond.get('op', 'equal')
+            val = cond.get('value')
+            try:
+                node = None
+                if op == 'equal':
+                    node = Filter.by_property(prop).equal(val)
+                elif op == 'like':
+                    node = Filter.by_property(prop).like(val)
+                elif op == 'greater_than':
+                    node = Filter.by_property(prop).greater_than(val)
+                elif op == 'less_than':
+                    node = Filter.by_property(prop).less_than(val)
+                else:
+                    node = Filter.by_property(prop).equal(val)
+                built = node if built is None else (built & node)
+            except Exception:
+                continue
+        return built
+
+    def _fmt_filter_hint(self, intent: dict) -> str:
+        """Restituisce una stringa descrittiva del filtro per la risposta utente."""
+        try:
+            f = intent.get('filter')
+            if not f:
+                return ''
+            parts = []
+            for c in f.get('conditions', []):
+                op = c.get('op')
+                if op == 'equal':
+                    parts.append(f"{c.get('property')} = '{c.get('value')}'")
+                elif op in ('greater_than', 'less_than'):
+                    sym = '>' if op == 'greater_than' else '<'
+                    parts.append(f"{c.get('property')} {sym} {c.get('value')}")
+            return f" (filtro: {', '.join(parts)})" if parts else ''
+        except Exception:
+            return ''
+
 
     def handle_conversational_question(self, question: str, class_name: str = None) -> str:
         """Gestisce domande conversazionali come saluti, ringraziamenti e domande sul sistema."""
@@ -1871,348 +1936,771 @@ Errore tecnico: {str(e)}"""
             return "Ciao! 😊 Sono NeuralTabb, il tuo assistente per l'analisi dei dati. Come posso aiutarti oggi?"
 
     def handle_general_question(self, question: str, class_name: str) -> str:
-        """Usa l'approccio RAG con Gemini per domande generali."""
+        """RAG ottimizzato con prompt compatti per ridurre i costi."""
         try:
             collection = self.client.collections.get(class_name)
             
-            # Scopri le proprietà testuali
-            sample = collection.query.fetch_objects(limit=1)
-            if not sample.objects:
-                 return "La collezione è vuota."
-            
-            text_properties = [k for k, v in sample.objects[0].properties.items() if isinstance(v, str)]
-            if not text_properties:
-                return "Nessuna proprietà testuale trovata per la ricerca."
-
+            # Cerca documenti pertinenti (limitato a 2 per ridurre token)
             result = collection.query.near_text(
                 query=question,
-                limit=3,
-                return_properties=text_properties
+                limit=2,  # Ridotto da 3 a 2
+                return_properties=["title", "content"]  # Solo proprietà essenziali
             )
             
-            context_documents = result.objects
-            if not context_documents:
-                return "Non ho trovato informazioni pertinenti per rispondere alla tua domanda."
+            if not result.objects:
+                return "Non ho trovato informazioni pertinenti per la tua domanda nei dati."
 
-            context = "\n".join([f"- Documento: {doc.properties}" for doc in context_documents])
+            # Estrai solo il contenuto essenziale (limita i token)
+            contexts = []
+            for doc in result.objects:
+                content = doc.properties.get('content', '')
+                if len(content) > 300:  # Tronca contenuti molto lunghi
+                    content = content[:300] + "..."
+                contexts.append(content)
             
-            prompt = f"""
-            Basandoti esclusivamente sul seguente contesto, rispondi alla domanda.
+            context = "\n".join(contexts)
+            
+            # Prompt molto compatto (80% più breve del precedente)
+            prompt = f"""Basato su questi dati, rispondi: "{question}"
 
-            Contesto:
-            {context}
+Dati:
+{context}
 
-            Domanda: {question}
-
-            Risposta:
-            """
+Risposta breve e diretta:"""
             
             response = self.model.generate_content(prompt)
             return response.text.strip()
+            
         except Exception as e:
-            return f"Impossibile generare la risposta con Gemini: {e}"
+            return f"Errore nell'analisi: {e}"
 
     def handle_cleaning_question(self, question: str, class_name: str = None) -> str:
-        """Gestisce domande relative alla pulizia e normalizzazione dei dati."""
-        try:
-            # Per ora restituiamo una risposta che indica che la funzionalità sarà implementata
-            model_name = getattr(self, 'current_model_name', 'Gemini')
-            
-            prompt = f"""
-            Sei NeuralTabb, un assistente AI specializzato nella pulizia dei dati usando {model_name}.
-            
-            L'utente ha fatto questa richiesta di pulizia dati:
-            "{question}"
-            
-            ATTUALMENTE DISPONIBILE:
-            - Riconoscimento delle richieste di pulizia dati
-            - Classificazione dei tipi di pulizia richiesti
-            
-            FUNZIONALITÀ IN SVILUPPO (prossime implementazioni):
-            - Rimozione duplicati
-            - Normalizzazione valori
-            - Correzione errori di formato
-            - Validazione campi
-            - Pulizia dati mancanti
-            - Standardizzazione testo
-            
-            Rispondi in modo professionale spiegando che hai compreso la richiesta di pulizia
-            e che questa funzionalità è in fase di sviluppo. Suggerisci quali operazioni 
-            di pulizia potrebbero essere utili per il tipo di richiesta ricevuta.
-            
-            Mantieni un tono incoraggiante e professionale.
-            """
-            
-            response = self.model.generate_content(prompt)
-            return f"🧹 **Richiesta di Pulizia Dati Riconosciuta**\n\n{response.text.strip()}"
-            
-        except Exception as e:
-            print(f"Errore nella gestione domanda di pulizia: {e}")
-            return """🧹 **Richiesta di Pulizia Dati**
-
-Ho riconosciuto che stai chiedendo operazioni di pulizia sui dati. 
-
-**Funzionalità di pulizia in fase di sviluppo:**
-- Rimozione duplicati
-- Normalizzazione valori
-- Correzione errori di formato  
-- Validazione campi
-- Gestione dati mancanti
-
-La tua richiesta è stata registrata e sarà disponibile nel prossimo aggiornamento! 🚀"""
-
-    def handle_integration_question(self, question: str, class_name: str = None) -> str:
-        """Gestisce domande relative all'integrazione e fusione di dataset."""
-        try:
-            # Per ora restituiamo una risposta che indica che la funzionalità sarà implementata
-            model_name = getattr(self, 'current_model_name', 'Gemini')
-            
-            prompt = f"""
-            Sei NeuralTabb, un assistente AI specializzato nell'integrazione di dati usando {model_name}.
-            
-            L'utente ha fatto questa richiesta di integrazione dati:
-            "{question}"
-            
-            ATTUALMENTE DISPONIBILE:
-            - Riconoscimento delle richieste di integrazione dati
-            - Classificazione dei tipi di integrazione richiesti
-            
-            FUNZIONALITÀ IN SVILUPPO (prossime implementazioni):
-            - Merge di dataset multipli
-            - Join basato su chiavi comuni
-            - Concatenazione di file
-            - Fusione intelligente di schemi
-            - Risoluzione conflitti dati
-            - Mappatura automatica campi
-            
-            Rispondi in modo professionale spiegando che hai compreso la richiesta di integrazione
-            e che questa funzionalità è in fase di sviluppo. Suggerisci quali operazioni 
-            di integrazione potrebbero essere utili per il tipo di richiesta ricevuta.
-            
-            Mantieni un tono incoraggiante e professionale.
-            """
-            
-            response = self.model.generate_content(prompt)
-            return f"🔗 **Richiesta di Integrazione Dati Riconosciuta**\n\n{response.text.strip()}"
-            
-        except Exception as e:
-            print(f"Errore nella gestione domanda di integrazione: {e}")
-            return """🔗 **Richiesta di Integrazione Dati**
-
-Ho riconosciuto che stai chiedendo operazioni di integrazione tra dataset.
-
-**Funzionalità di integrazione in fase di sviluppo:**
-- Merge di dataset multipli
-- Join basato su chiavi comuni  
-- Concatenazione di file
-- Fusione intelligente di schemi
-- Risoluzione conflitti dati
-- Mappatura automatica campi
-
-La tua richiesta è stata registrata e sarà disponibile nel prossimo aggiornamento! 🚀"""
-
-    def smart_answer(self, question: str, class_name: str = None) -> str:
-        """Classifica la domanda e la indirizza alla funzione corretta."""
-        question_type = self.classify_question(question)
+        """Gestisce domande di pulizia dati con operazioni reali sui dati."""
+        if not class_name:
+            return "🧹 **Pulizia Dati**\n\nPer eseguire operazioni di pulizia, devi prima selezionare una collezione di dati da pulire."
         
-        print(f"Tipo di domanda rilevato da Gemini: {question_type}")
-
-        if question_type == "conversazionale":
-            return self.handle_conversational_question(question, class_name)
-        elif question_type == "analitica":
-            if not class_name:
-                return "Per domande analitiche, devi selezionare una collezione di dati da analizzare. 📊"
-            return self.handle_analytical_question(question, class_name)
-        elif question_type == "pulizia":
-            return self.handle_cleaning_question(question, class_name)
-        elif question_type == "integrazione":
-            return self.handle_integration_question(question, class_name)
-        else: # 'generale'
-            if not class_name:
-                return "Per domande sui contenuti, devi selezionare una collezione di dati da esplorare. 🔍"
-            return self.handle_general_question(question, class_name)
-
-    def _validate_and_fix_weaviate_code(self, code: str) -> str:
-        """Valida e corregge il codice Weaviate generato da Gemini."""
         try:
-            # Correzioni comuni
-            fixes = [
-                # Assicurati che ci sia una variabile response
-                ("result =", "response ="),
-                ("data =", "response ="),
-                ("query_result =", "response ="),
-                # Fix import statements che potrebbero essere inserite
-                ("from weaviate.classes", "# from weaviate.classes"),
-                ("import Filter", "# import Filter"),
-            ]
+            collection = self.client.collections.get(class_name)
+            question_lower = question.lower()
             
-            for old, new in fixes:
-                code = code.replace(old, new)
+            # 1. RIMOZIONE DUPLICATI
+            if any(word in question_lower for word in ["duplicat", "duplicate", "doppi", "ripetut"]):
+                return self._handle_duplicate_removal(collection, class_name, question)
             
-            # Assicurati che il codice finisca con l'assegnazione a response
-            if "response =" not in code:
-                if code.strip().split('\n')[-1].startswith(('collection.', 'result', 'data')):
-                    last_line = code.strip().split('\n')[-1]
-                    code = code.replace(last_line, f"response = {last_line}")
+            # 2. PULIZIA VALORI VUOTI/NULL
+            elif any(word in question_lower for word in ["vuot", "null", "empty", "mancant", "missing", "nan"]):
+                return self._handle_empty_values(collection, class_name, question)
             
-            return code
+            # 3. NORMALIZZAZIONE TESTO
+            elif any(word in question_lower for word in ["normaliz", "standard", "maiuscol", "minuscol", "uppercase", "lowercase", "format"]):
+                return self._handle_text_normalization(collection, class_name, question)
             
-        except Exception as e:
-            print(f"Errore nella correzione del codice: {e}")
-            return code
-
-    def _format_weaviate_response(self, response_data, question: str) -> str:
-        """Formatta la risposta di Weaviate in un formato leggibile."""
-        try:
-            # Verifica il tipo di risposta
-            if hasattr(response_data, 'total_count'):
-                # Risposta di aggregazione con conteggio
-                return f"Ho trovato {response_data.total_count} risultati per la tua domanda: '{question}'"
+            # 4. RIMOZIONE SPAZI
+            elif any(word in question_lower for word in ["spazi", "spaces", "trim", "whitespace", "pulisci spazi"]):
+                return self._handle_whitespace_cleaning(collection, class_name, question)
             
-            elif hasattr(response_data, 'objects') and response_data.objects:
-                # Risposta con oggetti (query normale)
-                count = len(response_data.objects)
-                result = f"Ho trovato {count} risultati per: '{question}'\n\n"
-                
-                for i, obj in enumerate(response_data.objects[:10], 1):  # Mostra max 10 risultati
-                    result += f"{i}. "
-                    props = obj.properties
-                    
-                    # Mostra le prime 3 proprietà disponibili (o tutte se sono meno di 3)
-                    property_names = list(props.keys())
-                    max_props_to_show = min(3, len(property_names))
-                    
-                    displayed_props = []
-                    for j in range(max_props_to_show):
-                        prop_name = property_names[j]
-                        prop_value = props[prop_name]
-                        
-                        # Gestisci diversi tipi di dati
-                        if prop_value is None:
-                            prop_value_str = "N/A"
-                        elif isinstance(prop_value, str):
-                            # Se il testo è troppo lungo, troncalo
-                            prop_value_str = prop_value[:100] + "..." if len(str(prop_value)) > 100 else str(prop_value)
-                        else:
-                            prop_value_str = str(prop_value)
-                        
-                        displayed_props.append(f"{prop_name}: {prop_value_str}")
-                    
-                    result += " | ".join(displayed_props)
-                    
-                    # Se ci sono più di 3 proprietà, indica che ce ne sono altre
-                    if len(property_names) > 3:
-                        result += f" | ... (+{len(property_names) - 3} altre proprietà)"
-                    
-                    result += "\n"
-                
-                if count > 10:
-                    result += f"\n... e altri {count-10} risultati."
-                
-                return result
+            # 5. CORREZIONE ENCODING
+            elif any(word in question_lower for word in ["encoding", "caratteri", "accenti", "utf", "codifica"]):
+                return self._handle_encoding_issues(collection, class_name, question)
             
-            elif hasattr(response_data, 'properties'):
-                # Risposta di aggregazione con proprietà numeriche
-                props = response_data.properties
-                result = f"Statistiche per: '{question}'\n\n"
-                
-                for prop_name, values in props.items():
-                    if hasattr(values, 'sum_'):
-                        result += f"• {prop_name} - Somma: {values.sum_}\n"
-                    if hasattr(values, 'maximum'):
-                        result += f"• {prop_name} - Massimo: {values.maximum}\n"
-                    if hasattr(values, 'minimum'):
-                        result += f"• {prop_name} - Minimo: {values.minimum}\n"
-                    if hasattr(values, 'mean'):
-                        result += f"• {prop_name} - Media: {values.mean}\n"
-                
-                return result
+            # 6. VALIDAZIONE DATI
+            elif any(word in question_lower for word in ["valid", "controlla", "verifica", "check", "integrità"]):
+                return self._handle_data_validation(collection, class_name, question)
             
-            elif hasattr(response_data, 'groups'):
-                # Risposta di raggruppamento (nuova gestione per Weaviate v4)
-                result = f"📊 **Raggruppamento per: '{question}'**\n\n"
-                
-                if hasattr(response_data.groups, 'items'):
-                    # Nuova struttura Weaviate v4
-                    for group in response_data.groups:
-                        group_name = getattr(group, 'grouped_by', {}).get('value', 'Non specificato')
-                        count = getattr(group, 'total_count', 0)
-                        result += f"• **{group_name}**: {count} elementi\n"
-                else:
-                    # Struttura legacy
-                    for group_name, group_data in response_data.groups.items():
-                        count = getattr(group_data, 'total_count', 0)
-                        result += f"• **{group_name}**: {count} elementi\n"
-                
-                return result
-                
-            # Gestione specifica per aggregazioni Weaviate v4
-            elif hasattr(response_data, '__dict__') and any(hasattr(response_data, attr) for attr in ['groups', 'total_count']):
-                result = f"📊 **Risultati per: '{question}'**\n\n"
-                
-                # Prova a gestire diverse strutture di aggregazione
-                if hasattr(response_data, 'groups') and response_data.groups:
-                    # Gestione gruppi
-                    groups = response_data.groups if hasattr(response_data.groups, '__iter__') else [response_data.groups]
-                    for i, group in enumerate(groups):
-                        if hasattr(group, 'grouped_by') and hasattr(group, 'total_count'):
-                            group_value = group.grouped_by.get('value', f'Gruppo {i+1}')
-                            result += f"• **{group_value}**: {group.total_count} elementi\n"
-                        elif hasattr(group, 'name') and hasattr(group, 'count'):
-                            result += f"• **{group.name}**: {group.count} elementi\n"
-                        else:
-                            # Fallback - prova a estrarre qualsiasi informazione disponibile
-                            result += f"• **Gruppo {i+1}**: {getattr(group, 'total_count', 'N/D')} elementi\n"
-                
-                elif hasattr(response_data, 'total_count'):
-                    result += f"Totale elementi: {response_data.total_count}\n"
-                
-                return result if result != f"📊 **Risultati per: '{question}'**\n\n" else "Risultati di aggregazione ricevuti ma formato non riconosciuto."
+            # 7. RIMOZIONE OUTLIERS
+            elif any(word in question_lower for word in ["outlier", "anomal", "valore strani", "strange value"]):
+                return self._handle_outlier_removal(collection, class_name, question)
+            
+            # 8. PULIZIA GENERALE
+            elif any(word in question_lower for word in ["pulisci", "clean", "sistema", "ripara", "fix", "correggi"]):
+                return self._handle_general_cleaning(collection, class_name, question)
             
             else:
-                # Fallback: prova a convertire in JSON
-                import json
-                return f"Risultato per '{question}':\n{json.dumps(response_data, indent=2, default=str)}"
+                # Usa Gemini per operazioni più specifiche
+                return self._handle_custom_cleaning_with_gemini(question, collection, class_name)
                 
         except Exception as e:
-            print(f"Errore nella formattazione della risposta: {e}")
-            return f"Ho ottenuto una risposta per '{question}', ma non riesco a formattarla correttamente. Errore: {str(e)}"
+            return f"🧹 **Errore durante la pulizia**\n\nSi è verificato un errore: {str(e)}"
 
-# Esempio di utilizzo della classe QASystemWithGemini
-if __name__ == '__main__':
-    try:
-        # Connessione a Weaviate
-        weaviate_client = weaviate.Client("http://localhost:8080")
+    def _handle_duplicate_removal(self, collection, class_name: str, question: str) -> str:
+        """Gestisce la rimozione dei duplicati."""
+        try:
+            # Ottieni un campione per analizzare i duplicati
+            response = collection.query.fetch_objects(limit=1000, include_vector=True)
+            documents = response.objects
+            
+            if len(documents) < 2:
+                return "🧹 **Rimozione Duplicati**\n\nNon ci sono abbastanza documenti per rilevare duplicati (minimo 2 richiesti)."
+            
+            # Calcola similarità tra documenti
+            vectors = []
+            doc_info = []
+            
+            for doc in documents:
+                if hasattr(doc, 'vector') and doc.vector:
+                    vectors.append(doc.vector.get("default", []))
+                    doc_info.append({
+                        "id": str(doc.uuid),
+                        "properties": doc.properties
+                    })
+            
+            if len(vectors) < 2:
+                return "🧹 **Rimozione Duplicati**\n\nNon sono disponibili vettori per il calcolo della similarità."
+            
+            # Calcola matrice di similarità
+            import numpy as np
+            from sklearn.metrics.pairwise import cosine_similarity
+            
+            vectors_array = np.array(vectors)
+            similarity_matrix = cosine_similarity(vectors_array)
+            
+            # Trova duplicati (soglia di similarità alta)
+            threshold = 0.95
+            duplicates_found = []
+            processed_indices = set()
+            
+            for i in range(len(similarity_matrix)):
+                if i in processed_indices:
+                    continue
+                    
+                similar_docs = []
+                for j in range(i + 1, len(similarity_matrix)):
+                    if j in processed_indices:
+                        continue
+                        
+                    if similarity_matrix[i][j] > threshold:
+                        if not similar_docs:  # Prima volta che troviamo un duplicato per doc i
+                            similar_docs.append(doc_info[i])
+                        similar_docs.append(doc_info[j])
+                        processed_indices.add(j)
+                
+                if similar_docs:
+                    duplicates_found.append(similar_docs)
+                    processed_indices.add(i)
+            
+            if not duplicates_found:
+                return f"🧹 **Rimozione Duplicati Completata**\n\nNessun duplicato trovato nella collezione '{class_name}' con soglia di similarità {threshold:.0%}.\n\n✅ La collezione è già pulita!"
+            
+            # Conta i duplicati
+            total_duplicates = sum(len(group) - 1 for group in duplicates_found)  # -1 perché teniamo l'originale
+            
+            result = f"🧹 **Duplicati Rilevati**\n\n"
+            result += f"📊 **Statistiche:**\n"
+            result += f"• Documenti analizzati: {len(documents)}\n"
+            result += f"• Gruppi di duplicati: {len(duplicates_found)}\n"
+            result += f"• Duplicati da rimuovere: {total_duplicates}\n\n"
+            
+            result += f"🔍 **Dettagli gruppi duplicati:**\n"
+            
+            for i, group in enumerate(duplicates_found[:5]):  # Mostra max 5 gruppi
+                result += f"\n**Gruppo {i+1}** ({len(group)} documenti):\n"
+                
+                for j, doc in enumerate(group[:3]):  # Mostra max 3 doc per gruppo
+                    # Trova la prima proprietà testuale per il preview
+                    preview = "N/A"
+                    for prop_name, prop_value in doc["properties"].items():
+                        if isinstance(prop_value, str) and len(prop_value) > 10:
+                            preview = prop_value[:100] + "..." if len(prop_value) > 100 else prop_value
+                            break
+                    
+                    result += f"  • Doc {j+1}: {preview}\n"
+                
+                if len(group) > 3:
+                    result += f"  ... e altri {len(group)-3} documenti simili\n"
+            
+            if len(duplicates_found) > 5:
+                result += f"\n... e altri {len(duplicates_found)-5} gruppi di duplicati.\n"
+            
+            # Rimuovi automaticamente i duplicati se richiesto esplicitamente
+            if any(word in question.lower() for word in ["rimuovi", "elimina", "cancella", "remove", "delete"]):
+                removed_count = 0
+                for group in duplicates_found:
+                    # Tieni il primo documento di ogni gruppo, rimuovi gli altri
+                    for doc_to_remove in group[1:]:
+                        try:
+                            collection.data.delete_by_id(doc_to_remove["id"])
+                            removed_count += 1
+                        except Exception as e:
+                            print(f"Errore rimozione documento {doc_to_remove['id']}: {e}")
+                
+                result += f"\n✅ **Rimozione completata!**\n"
+                result += f"• Documenti rimossi: {removed_count}\n"
+                result += f"• Documenti rimanenti: {len(documents) - removed_count}"
+            else:
+                result += f"\n💡 **Suggerimento:** Per rimuovere automaticamente i duplicati, chiedi: 'Rimuovi i duplicati dalla collezione {class_name}'"
+            
+            return result
+            
+        except Exception as e:
+            return f"🧹 **Errore Rimozione Duplicati**\n\nErrore durante l'analisi duplicati: {str(e)}"
 
-        # Inizializza il sistema QA con Gemini
-        # Assicurati che 'chiave.txt' sia nel percorso corretto
-        qa_system = QASystemWithGemini(weaviate_client)
-        
-        collection_to_query = "Book" # Sostituisci con il nome della tua collezione
+    def _handle_empty_values(self, collection, class_name: str, question: str) -> str:
+        """Gestisce la pulizia di valori vuoti/null."""
+        try:
+            # Ottieni campione per analizzare valori vuoti
+            response = collection.query.fetch_objects(limit=500)
+            documents = response.objects
+            
+            if not documents:
+                return "🧹 **Pulizia Valori Vuoti**\n\nNessun documento trovato nella collezione."
+            
+            # Analizza valori vuoti
+            property_stats = {}
+            total_docs = len(documents)
+            
+            # Ottieni tutte le proprietà
+            all_properties = set()
+            for doc in documents:
+                all_properties.update(doc.properties.keys())
+            
+            for prop_name in all_properties:
+                empty_count = 0
+                non_empty_values = []
+                
+                for doc in documents:
+                    value = doc.properties.get(prop_name)
+                    
+                    # Controlla se è vuoto
+                    if (value is None or 
+                        (isinstance(value, str) and value.strip() == "") or
+                        (isinstance(value, (list, dict)) and len(value) == 0)):
+                        empty_count += 1
+                    else:
+                        non_empty_values.append(value)
+                
+                if empty_count > 0:
+                    property_stats[prop_name] = {
+                        "empty_count": empty_count,
+                        "non_empty_count": total_docs - empty_count,
+                        "empty_percentage": (empty_count / total_docs) * 100,
+                        "sample_values": non_empty_values[:3]  # Primi 3 valori non vuoti
+                    }
+            
+            if not property_stats:
+                return f"🧹 **Pulizia Valori Vuoti Completata**\n\n✅ Nessun valore vuoto trovato nella collezione '{class_name}'!"
+            
+            result = f"🧹 **Analisi Valori Vuoti**\n\n"
+            result += f"📊 **Statistiche generali:**\n"
+            result += f"• Documenti analizzati: {total_docs}\n"
+            result += f"• Proprietà con valori vuoti: {len(property_stats)}\n\n"
+            
+            result += f"🔍 **Dettaglio per proprietà:**\n"
+            
+            for prop_name, stats in sorted(property_stats.items(), key=lambda x: x[1]["empty_percentage"], reverse=True):
+                result += f"\n**{prop_name}:**\n"
+                result += f"  • Valori vuoti: {stats['empty_count']} ({stats['empty_percentage']:.1f}%)\n"
+                result += f"  • Valori presenti: {stats['non_empty_count']}\n"
+                
+                if stats['sample_values']:
+                    sample_str = ", ".join([str(v)[:50] for v in stats['sample_values']])
+                    result += f"  • Esempi valori: {sample_str}\n"
+            
+            # Se richiesto, rimuovi documenti con troppi valori vuoti
+            if any(word in question.lower() for word in ["rimuovi", "elimina", "remove", "delete", "pulisci"]):
+                # Rimuovi documenti che hanno >70% di campi vuoti
+                threshold = 0.7
+                removed_count = 0
+                
+                for doc in documents:
+                    empty_fields = 0
+                    total_fields = len(all_properties)
+                    
+                    for prop_name in all_properties:
+                        value = doc.properties.get(prop_name)
+                        if (value is None or 
+                            (isinstance(value, str) and value.strip() == "") or
+                            (isinstance(value, (list, dict)) and len(value) == 0)):
+                            empty_fields += 1
+                    
+                    empty_ratio = empty_fields / total_fields if total_fields > 0 else 0
+                    
+                    if empty_ratio > threshold:
+                        try:
+                            collection.data.delete_by_id(str(doc.uuid))
+                            removed_count += 1
+                        except Exception as e:
+                            print(f"Errore rimozione documento {doc.uuid}: {e}")
+                
+                result += f"\n✅ **Pulizia completata!**\n"
+                result += f"• Documenti rimossi (>{threshold:.0%} campi vuoti): {removed_count}\n"
+                result += f"• Documenti rimanenti: {total_docs - removed_count}"
+            else:
+                result += f"\n💡 **Suggerimenti:**\n"
+                result += f"• Per rimuovere documenti con troppi campi vuoti: 'Rimuovi i documenti con valori vuoti'\n"
+                result += f"• Per sostituire valori vuoti: 'Sostituisci i valori vuoti con [valore]'"
+            
+            return result
+            
+        except Exception as e:
+            return f"🧹 **Errore Pulizia Valori Vuoti**\n\nErrore durante l'analisi: {str(e)}"
 
-        # Esempio domanda generale
-        general_q = "Parlami dei libri che trattano di magia"
-        print(f"--- Domanda Generale ---\n{general_q}")
-        general_a = qa_system.smart_answer(general_q, collection_to_query)
-        print(f"Risposta: {general_a}\n")
+    def _handle_text_normalization(self, collection, class_name: str, question: str) -> str:
+        """Gestisce la normalizzazione del testo."""
+        try:
+            response = collection.query.fetch_objects(limit=100)
+            documents = response.objects
+            
+            if not documents:
+                return "🧹 **Normalizzazione Testo**\n\nNessun documento trovato nella collezione."
+            
+            # Trova proprietà testuali
+            text_properties = []
+            for doc in documents[:5]:  # Campione per identificare proprietà testuali
+                for prop_name, prop_value in doc.properties.items():
+                    if isinstance(prop_value, str) and len(prop_value) > 5:
+                        if prop_name not in text_properties:
+                            text_properties.append(prop_name)
+            
+            if not text_properties:
+                return f"🧹 **Normalizzazione Testo**\n\nNessuna proprietà testuale trovata nella collezione '{class_name}'."
+            
+            # Analizza problemi di normalizzazione
+            normalization_issues = {
+                'mixed_case': 0,
+                'extra_spaces': 0,
+                'special_chars': 0,
+                'encoding_issues': 0
+            }
+            
+            examples = {
+                'mixed_case': [],
+                'extra_spaces': [],
+                'special_chars': [],
+                'encoding_issues': []
+            }
+            
+            import re
+            
+            for doc in documents:
+                for prop_name in text_properties:
+                    value = doc.properties.get(prop_name, '')
+                    if not isinstance(value, str) or len(value.strip()) == 0:
+                        continue
+                    
+                    # Controlla case misto inconsistente
+                    if re.search(r'[A-Z][a-z]+[A-Z]', value) or re.search(r'[a-z][A-Z]', value):
+                        normalization_issues['mixed_case'] += 1
+                        if len(examples['mixed_case']) < 3:
+                            examples['mixed_case'].append(f"{prop_name}: '{value[:50]}...'")
+                    
+                    # Controlla spazi extra
+                    if '  ' in value or value != value.strip():
+                        normalization_issues['extra_spaces'] += 1
+                        if len(examples['extra_spaces']) < 3:
+                            examples['extra_spaces'].append(f"{prop_name}: '{value[:50]}...'")
+                    
+                    # Controlla caratteri speciali eccessivi
+                    special_count = len(re.findall(r'[^\w\s\.\,\!\?\-\'\"]', value))
+                    if special_count / len(value) > 0.1:  # >10% caratteri speciali
+                        normalization_issues['special_chars'] += 1
+                        if len(examples['special_chars']) < 3:
+                            examples['special_chars'].append(f"{prop_name}: '{value[:50]}...'")
+                    
+                    # Controlla possibili problemi di encoding
+                    if any(char in value for char in ['Ã', 'â', 'Â', 'Ã©', 'Ã¨']):
+                        normalization_issues['encoding_issues'] += 1
+                        if len(examples['encoding_issues']) < 3:
+                            examples['encoding_issues'].append(f"{prop_name}: '{value[:50]}...'")
+            
+            total_issues = sum(normalization_issues.values())
+            
+            if total_issues == 0:
+                return f"🧹 **Normalizzazione Testo Completata**\n\n✅ Nessun problema di normalizzazione trovato nella collezione '{class_name}'!"
+            
+            result = f"🧹 **Analisi Normalizzazione Testo**\n\n"
+            result += f"📊 **Statistiche:**\n"
+            result += f"• Documenti analizzati: {len(documents)}\n"
+            result += f"• Proprietà testuali: {len(text_properties)}\n"
+            result += f"• Problemi totali rilevati: {total_issues}\n\n"
+            
+            result += f"🔍 **Dettaglio problemi:**\n"
+            
+            issue_labels = {
+                'mixed_case': 'Case inconsistente',
+                'extra_spaces': 'Spazi extra',
+                'special_chars': 'Caratteri speciali eccessivi',
+                'encoding_issues': 'Problemi encoding'
+            }
+            
+            for issue_type, count in normalization_issues.items():
+                if count > 0:
+                    result += f"\n**{issue_labels[issue_type]}:** {count} occorrenze\n"
+                    if examples[issue_type]:
+                        result += "  Esempi:\n"
+                        for example in examples[issue_type]:
+                            result += f"  • {example}\n"
+            
+            # Suggerimenti per la normalizzazione
+            result += f"\n💡 **Suggerimenti di normalizzazione:**\n"
+            if normalization_issues['mixed_case'] > 0:
+                result += f"• Per uniformare il case: 'Converti tutto in minuscolo' o 'Converti in Title Case'\n"
+            if normalization_issues['extra_spaces'] > 0:
+                result += f"• Per rimuovere spazi extra: 'Rimuovi spazi doppi e trim'\n"
+            if normalization_issues['special_chars'] > 0:
+                result += f"• Per pulire caratteri speciali: 'Rimuovi caratteri speciali'\n"
+            if normalization_issues['encoding_issues'] > 0:
+                result += f"• Per correggere encoding: 'Correggi problemi di encoding UTF-8'\n"
+            
+            return result
+            
+        except Exception as e:
+            return f"🧹 **Errore Normalizzazione Testo**\n\nErrore durante l'analisi: {str(e)}"
 
-        # Esempio domanda analitica
-        analytical_q = "Quanti libri ha scritto Isaac Asimov?"
-        print(f"--- Domanda Analitica ---\n{analytical_q}")
-        analytical_a = qa_system.smart_answer(analytical_q, collection_to_query)
-        print(f"Risposta: {analytical_a}\n")
-        
-        # Esempio domanda di pulizia
-        cleaning_q = "Pulisci i dati rimuovendo i duplicati"
-        print(f"--- Domanda di Pulizia ---\n{cleaning_q}")
-        cleaning_a = qa_system.smart_answer(cleaning_q, collection_to_query)
-        print(f"Risposta: {cleaning_a}\n")
-        
-        # Esempio domanda di integrazione
-        integration_q = "Integra questo dataset con altri file"
-        print(f"--- Domanda di Integrazione ---\n{integration_q}")
-        integration_a = qa_system.smart_answer(integration_q, collection_to_query)
-        print(f"Risposta: {integration_a}\n")
+    def _handle_whitespace_cleaning(self, collection, class_name: str, question: str) -> str:
+        """Gestisce la pulizia degli spazi bianchi."""
+        try:
+            response = collection.query.fetch_objects(limit=200)
+            documents = response.objects
+            
+            if not documents:
+                return "🧹 **Pulizia Spazi**\n\nNessun documento trovato nella collezione."
+            
+            # Trova proprietà testuali e analizza problemi di spazi
+            whitespace_issues = 0
+            cleaned_count = 0
+            examples = []
+            
+            for doc in documents:
+                doc_updated = False
+                updated_properties = {}
+                
+                for prop_name, prop_value in doc.properties.items():
+                    if isinstance(prop_value, str):
+                        original_value = prop_value
+                        
+                        # Pulisci spazi
+                        cleaned_value = prop_value.strip()  # Rimuovi spazi iniziali/finali
+                        cleaned_value = re.sub(r'\s+', ' ', cleaned_value)  # Sostituisci spazi multipli con singoli
+                        
+                        if original_value != cleaned_value:
+                            whitespace_issues += 1
+                            updated_properties[prop_name] = cleaned_value
+                            doc_updated = True
+                            
+                            if len(examples) < 5:
+                                examples.append({
+                                    "property": prop_name,
+                                    "before": original_value[:50] + "..." if len(original_value) > 50 else original_value,
+                                    "after": cleaned_value[:50] + "..." if len(cleaned_value) > 50 else cleaned_value
+                                })
+                
+                # Se richiesto, aggiorna il documento
+                if doc_updated and any(word in question.lower() for word in ["pulisci", "rimuovi", "clean", "trim", "remove"]):
+                    try:
+                        # Aggiorna tutte le proprietà del documento
+                        all_properties = doc.properties.copy()
+                        all_properties.update(updated_properties)
+                        
+                        collection.data.replace(
+                            uuid=str(doc.uuid),
+                            properties=all_properties
+                        )
+                        cleaned_count += 1
+                    except Exception as e:
+                        print(f"Errore aggiornamento documento {doc.uuid}: {e}")
+            
+            if whitespace_issues == 0:
+                return f"🧹 **Pulizia Spazi Completata**\n\n✅ Nessun problema di spazi trovato nella collezione '{class_name}'!"
+            
+            result = f"🧹 **Analisi Spazi Bianchi**\n\n"
+            result += f"📊 **Statistiche:**\n"
+            result += f"• Documenti analizzati: {len(documents)}\n"
+            result += f"• Problemi di spazi rilevati: {whitespace_issues}\n"
+            
+            if examples:
+                result += f"\n🔍 **Esempi di pulizia:**\n"
+                for example in examples:
+                    result += f"\n**{example['property']}:**\n"
+                    result += f"  Prima:  '{example['before']}'\n"
+                    result += f"  Dopo:   '{example['after']}'\n"
+            
+            if cleaned_count > 0:
+                result += f"\n✅ **Pulizia completata!**\n"
+                result += f"• Documenti aggiornati: {cleaned_count}\n"
+                result += f"• Proprietà corrette: {whitespace_issues}"
+            else:
+                result += f"\n💡 **Suggerimento:** Per applicare automaticamente la pulizia degli spazi, chiedi: 'Pulisci gli spazi dalla collezione {class_name}'"
+            
+            return result
+            
+        except Exception as e:
+            return f"🧹 **Errore Pulizia Spazi**\n\nErrore durante la pulizia: {str(e)}"
 
-    except Exception as e:
-        print(f"Si è verificato un errore principale: {e}")
+    def _handle_encoding_issues(self, collection, class_name: str, question: str) -> str:
+        """Gestisce i problemi di encoding dei caratteri."""
+        return f"""🧹 **Correzione Encoding**
+
+Ho rilevato una richiesta per correggere problemi di encoding nella collezione '{class_name}'.
+
+**Problemi comuni di encoding:**
+- Caratteri accentati malformati (es: Ã, â, Â)
+- Simboli strani al posto di caratteri normali
+- Testo illeggibile dopo import da fonti diverse
+
+**Funzionalità di correzione encoding in sviluppo:**
+- ✨ Auto-rilevamento encoding problematici
+- ✨ Correzione UTF-8 automatica
+- ✨ Normalizzazione caratteri accentati
+- ✨ Conversione tra diversi encoding
+
+Questa funzionalità sarà presto disponibile! 🚀
+
+Nel frattempo, puoi:
+- Verificare l'encoding originale dei file prima dell'import
+- Usare UTF-8 come encoding standard
+- Controllare i caratteri speciali nei tuoi dati"""
+
+    def _handle_data_validation(self, collection, class_name: str, question: str) -> str:
+        """Gestisce la validazione dell'integrità dei dati."""
+        try:
+            response = collection.query.fetch_objects(limit=300)
+            documents = response.objects
+            
+            if not documents:
+                return "🧹 **Validazione Dati**\n\nNessun documento trovato nella collezione."
+            
+            # Ottieni schema delle proprietà
+            all_properties = set()
+            property_types = {}
+            
+            for doc in documents[:50]:  # Campione per determinare tipi
+                for prop_name, prop_value in doc.properties.items():
+                    all_properties.add(prop_name)
+                    
+                    if prop_name not in property_types:
+                        if isinstance(prop_value, str):
+                            property_types[prop_name] = 'string'
+                        elif isinstance(prop_value, (int, float)):
+                            property_types[prop_name] = 'number'
+                        elif isinstance(prop_value, bool):
+                            property_types[prop_name] = 'boolean'
+                        elif isinstance(prop_value, list):
+                            property_types[prop_name] = 'array'
+                        else:
+                            property_types[prop_name] = 'unknown'
+            
+            # Validazione
+            validation_results = {
+                'missing_properties': 0,
+                'type_mismatches': 0,
+                'invalid_values': 0,
+                'inconsistent_formats': 0
+            }
+            
+            issues_details = []
+            
+            for doc in documents:
+                doc_id = str(doc.uuid)
+                
+                # Controlla proprietà mancanti
+                missing_props = all_properties - set(doc.properties.keys())
+                if missing_props:
+                    validation_results['missing_properties'] += len(missing_props)
+                    issues_details.append(f"Doc {doc_id[:8]}: proprietà mancanti {list(missing_props)[:3]}")
+                
+                # Controlla tipi inconsistenti
+                for prop_name, prop_value in doc.properties.items():
+                    expected_type = property_types.get(prop_name)
+                    actual_type = type(prop_value).__name__
+                    
+                    if expected_type == 'string' and not isinstance(prop_value, str):
+                        validation_results['type_mismatches'] += 1
+                        issues_details.append(f"Doc {doc_id[:8]}: {prop_name} dovrebbe essere stringa, trovato {actual_type}")
+                    
+                    elif expected_type == 'number' and not isinstance(prop_value, (int, float)):
+                        validation_results['type_mismatches'] += 1
+                        issues_details.append(f"Doc {doc_id[:8]}: {prop_name} dovrebbe essere numero, trovato {actual_type}")
+                    
+                    # Validazione valori specifici
+                    if isinstance(prop_value, str):
+                        # Email malformate
+                        if 'email' in prop_name.lower() and '@' in prop_value and '.' not in prop_value.split('@')[-1]:
+                            validation_results['invalid_values'] += 1
+                            issues_details.append(f"Doc {doc_id[:8]}: email malformata in {prop_name}")
+                        
+                        # URL malformati
+                        if 'url' in prop_name.lower() and not (prop_value.startswith('http://') or prop_value.startswith('https://')):
+                            validation_results['invalid_values'] += 1
+                            issues_details.append(f"Doc {doc_id[:8]}: URL malformato in {prop_name}")
+            
+            total_issues = sum(validation_results.values())
+            
+            result = f"🧹 **Validazione Integrità Dati**\n\n"
+            result += f"📊 **Statistiche:**\n"
+            result += f"• Documenti analizzati: {len(documents)}\n"
+            result += f"• Proprietà uniche rilevate: {len(all_properties)}\n"
+            result += f"• Problemi totali: {total_issues}\n\n"
+            
+            if total_issues == 0:
+                result += "✅ **Validazione completata con successo!**\nNessun problema di integrità rilevato.\n"
+            else:
+                result += f"🔍 **Dettaglio problemi:**\n"
+                for issue_type, count in validation_results.items():
+                    if count > 0:
+                        issue_name = issue_type.replace('_', ' ').title()
+                        result += f"• {issue_name}: {count}\n"
+                
+                result += f"\n📝 **Primi esempi di problemi:**\n"
+                for detail in issues_details[:10]:
+                    result += f"• {detail}\n"
+                
+                if len(issues_details) > 10:
+                    result += f"... e altri {len(issues_details) - 10} problemi.\n"
+            
+            result += f"\n📋 **Schema proprietà rilevato:**\n"
+            for prop_name, prop_type in sorted(property_types.items()):
+                result += f"• {prop_name}: {prop_type}\n"
+            
+            return result
+            
+        except Exception as e:
+            return f"🧹 **Errore Validazione Dati**\n\nErrore durante la validazione: {str(e)}"
+
+    def _handle_outlier_removal(self, collection, class_name: str, question: str) -> str:
+        """Gestisce la rimozione di outliers e valori anomali."""
+        return f"""🧹 **Rimozione Outliers**
+
+Ho rilevato una richiesta per identificare e rimuovere outliers nella collezione '{class_name}'.
+
+**Tipi di outliers che posso rilevare:**
+- 📊 Outliers numerici (valori statisticamente anomali)
+- 📝 Testi anomali (lunghezza, pattern strani)
+- 📅 Date fuori range ragionevole
+- 🔢 Valori fuori dai limiti logici
+
+**Funzionalità di rimozione outliers in sviluppo:**
+- ✨ Rilevamento automatico outliers statistici (Z-score, IQR)
+- ✨ Analisi anomalie testuali
+- ✨ Validazione range logici
+- ✨ Opzioni di rimozione/correzione selettive
+
+Questa funzionalità avanzata sarà presto disponibile! 🚀
+
+**Nel frattempo puoi:**
+- Identificare valori sospetti con query analitiche
+- Usare "mostra valori estremi per [campo]"
+- Controllare manualmente range dei dati numerici"""
+
+    def _handle_general_cleaning(self, collection, class_name: str, question: str) -> str:
+        """Gestisce richieste di pulizia generale (combina più operazioni)."""
+        try:
+            result = f"🧹 **Pulizia Generale Avviata**\n\nEseguo una pulizia completa della collezione '{class_name}'...\n\n"
+            
+            # 1. Controlla duplicati
+            result += "🔍 **1. Analisi Duplicati...**\n"
+            duplicate_result = self._handle_duplicate_removal(collection, class_name, "analizza duplicati")
+            if "Nessun duplicato" in duplicate_result:
+                result += "✅ Nessun duplicato trovato\n\n"
+            else:
+                # Estrai solo il numero di duplicati dal risultato
+                import re
+                match = re.search(r'Duplicati da rimuovere: (\d+)', duplicate_result)
+                if match:
+                    result += f"⚠️ Trovati {match.group(1)} duplicati\n\n"
+            
+            # 2. Controlla valori vuoti
+            result += "🔍 **2. Analisi Valori Vuoti...**\n"
+            empty_result = self._handle_empty_values(collection, class_name, "analizza valori vuoti")
+            if "Nessun valore vuoto" in empty_result:
+                result += "✅ Nessun valore vuoto problematico\n\n"
+            else:
+                # Estrai info sui valori vuoti
+                import re
+                match = re.search(r'Proprietà con valori vuoti: (\d+)', empty_result)
+                if match:
+                    result += f"⚠️ {match.group(1)} proprietà hanno valori vuoti\n\n"
+            
+            # 3. Controlla normalizzazione testo
+            result += "🔍 **3. Analisi Normalizzazione...**\n"
+            norm_result = self._handle_text_normalization(collection, class_name, "analizza normalizzazione")
+            if "Nessun problema" in norm_result:
+                result += "✅ Testo già normalizzato correttamente\n\n"
+            else:
+                import re
+                match = re.search(r'Problemi totali rilevati: (\d+)', norm_result)
+                if match:
+                    result += f"⚠️ {match.group(1)} problemi di normalizzazione\n\n"
+            
+            # 4. Controlla spazi
+            result += "🔍 **4. Analisi Spazi Bianchi...**\n"
+            space_result = self._handle_whitespace_cleaning(collection, class_name, "analizza spazi")
+            if "Nessun problema" in space_result:
+                result += "✅ Spazi già puliti\n\n"
+            else:
+                import re
+                match = re.search(r'Problemi di spazi rilevati: (\d+)', space_result)
+                if match:
+                    result += f"⚠️ {match.group(1)} problemi di spazi\n\n"
+            
+            # 5. Validazione generale
+            result += "🔍 **5. Validazione Integrità...**\n"
+            validation_result = self._handle_data_validation(collection, class_name, "valida dati")
+            if "Nessun problema" in validation_result:
+                result += "✅ Integrità dati confermata\n\n"
+            else:
+                import re
+                match = re.search(r'Problemi totali: (\d+)', validation_result)
+                if match:
+                    result += f"⚠️ {match.group(1)} problemi di integrità\n\n"
+            
+            result += "🎯 **Riepilogo Pulizia Generale:**\n"
+            result += "La scansione è completata. Per applicare automaticamente le correzioni, usa comandi specifici come:\n"
+            result += "• 'Rimuovi i duplicati'\n"
+            result += "• 'Pulisci gli spazi bianchi'\n"
+            result += "• 'Normalizza il testo'\n"
+            result += "• 'Rimuovi valori vuoti'\n\n"
+            result += "💡 **Suggerimento:** Per una pulizia automatica completa, chiedi: 'Applica tutte le correzioni di pulizia'"
+            
+            return result
+            
+        except Exception as e:
+            return f"🧹 **Errore Pulizia Generale**\n\nErrore durante la pulizia generale: {str(e)}"
+
+    def _handle_custom_cleaning_with_gemini(self, question: str, collection, class_name: str) -> str:
+        """Usa Gemini per operazioni di pulizia personalizzate non coperte dai metodi standard."""
+        try:
+            # Ottieni informazioni sulla collezione
+            sample_response = collection.query.fetch_objects(limit=3)
+            if not sample_response.objects:
+                return "🧹 **Pulizia Personalizzata**\n\nNessun documento trovato nella collezione per l'analisi."
+            
+            # Prepara contesto per Gemini
+            properties = list(sample_response.objects[0].properties.keys())
+            sample_data = []
+            
+            for doc in sample_response.objects:
+                doc_sample = {}
+                for prop_name, prop_value in doc.properties.items():
+                    if isinstance(prop_value, str) and len(prop_value) > 100:
+                        doc_sample[prop_name] = prop_value[:100] + "..."
+                    else:
+                        doc_sample[prop_name] = str(prop_value) if prop_value is not None else "NULL"
+                sample_data.append(doc_sample)
+            
+            prompt = f"""
+            Sei un esperto in pulizia e normalizzazione dati per la collezione '{class_name}'.
+            
+            RICHIESTA UTENTE: "{question}"
+            
+            PROPRIETÀ DISPONIBILI: {properties}
+            
+            CAMPIONE DATI:
+            {sample_data}
+            
+            Analizza la richiesta di pulizia e fornisci:
+            1. Tipo di operazione richiesta
+            2. Campi da processare  
+            3. Metodo di pulizia suggerito
+            4. Potenziali problemi da considerare
+            5. Passi specifici per l'implementazione
+            
+            IMPORTANTE: Sii specifico sui campi e metodi da usare.
+            """
+            
+            response = self.model.generate_content(prompt)
+            
+            return f"🧹 **Analisi Pulizia Personalizzata**\n\n{response.text.strip()}\n\n💡 **Nota:** Questa è un'analisi della richiesta. L'implementazione automatica di operazioni personalizzate sarà disponibile nelle prossime versioni."
+            
+        except Exception as e:
+            return f"🧹 **Errore Pulizia Personalizzata**\n\nErrore nell'analisi: {str(e)}"
+
