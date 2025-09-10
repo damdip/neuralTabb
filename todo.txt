@@ -5,5 +5,6 @@ pipeline domanda analitica:
 comprensione tipo domanda - >  domanda analitica: quanti elementi recuperare?   
                                                     quali sono le entità coinvolte ? 
                                                     quali sono le operazioni che vogliamo fare?
-                                                    traduzione dal
+                                                    traduzione, a partire dai tre dati, elementi da recuperare, entità coinvolte, operazioni che vogliamo fare
+                                                    della query per weaviate
                                             
