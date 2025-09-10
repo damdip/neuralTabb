@@ -125,8 +125,6 @@ def upload_documents():
     
     return render_template('upload.html')
 
-# Nel tuo file app.py o routes.py
-
 @app.route('/qa', methods=['GET', 'POST'])
 def question_answering():
     # Controllo se il client Weaviate è disponibile
@@ -206,59 +204,6 @@ def question_answering():
     
     return render_template('qa.html', collections=collections)
 
-@app.route('/analyze', methods=['GET', 'POST'])
-def analyze_data():
-    """Analisi dei dati tramite sistema QA Gemini"""
-    if not client:
-        return render_template('error.html', error="Connessione Weaviate non disponibile")
-    
-    if not qa_gemini:
-        return render_template('error.html', error="Sistema QA con Gemini non disponibile")
-    
-    # Reindirizza alla chat per l'analisi interattiva
-    return redirect(url_for('chat_interface'))
-
-@app.route('/clean', methods=['GET', 'POST'])
-def clean_data():
-    """Pulizia dei dati tramite sistema QA Gemini"""
-    if not client:
-        return render_template('error.html', error="Connessione Weaviate non disponibile")
-    
-    if not qa_gemini:
-        return render_template('error.html', error="Sistema QA con Gemini non disponibile")
-    
-    # Reindirizza alla chat per operazioni di pulizia interattive
-    return redirect(url_for('chat_interface'))
-
-@app.route('/integrate', methods=['GET', 'POST'])
-def integrate_data():
-    """Integrazione dati esterni"""
-    # Funzione semplificata - solo upload normale tramite il sistema esistente
-    flash('Per l\'integrazione dati, utilizza la funzione di upload standard')
-    return redirect(url_for('upload_documents'))
-
-@app.route('/extract', methods=['GET', 'POST'])
-def extract_knowledge():
-    """Estrazione conoscenza tramite sistema QA Gemini"""
-    if not client:
-        return render_template('error.html', error="Connessione Weaviate non disponibile")
-    
-    if not qa_gemini:
-        return render_template('error.html', error="Sistema QA con Gemini non disponibile")
-    
-    # Reindirizza alla chat per l'estrazione di conoscenza interattiva
-    return redirect(url_for('chat_interface'))
-
-@app.route('/api/search')
-def api_search():
-    """API endpoint per ricerca - deprecata, usa /chat/ask"""
-    return jsonify({'error': 'API deprecata, usa /chat/ask'}), 410
-
-@app.route('/api/stats')
-def api_stats():
-    """API endpoint per statistiche - deprecata, usa il sistema QA Gemini"""
-    return jsonify({'error': 'API deprecata, usa il sistema QA Gemini per statistiche'}), 410
-
 @app.route('/collections')
 def manage_collections():
     """Gestione collezioni"""
@@ -268,7 +213,6 @@ def manage_collections():
         
     except Exception as e:
         return render_template('error.html', error=str(e))
-
 
 @app.route('/chat')
 def chat_interface():
@@ -283,7 +227,6 @@ def chat_interface():
     model_info = qa_gemini.get_current_model_info() if qa_gemini else {}
     
     return render_template('chat.html', model_info=model_info)
-
 
 @app.route('/chat/ask', methods=['POST'])
 def chat_ask():
