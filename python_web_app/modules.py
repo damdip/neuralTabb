@@ -41,6 +41,371 @@ except:
     nlp = None
 
 
+
+
+class WeaviateManager:
+    def __init__(self, client):
+        self.client = client
+    
+    def setup_schema(self):
+        """Crea gli schemi di base"""
+        try:
+            # Controlla se la collezione Documents esiste già
+            try:
+                collection = self.client.collections.get("Documents")
+                print("Collezione Documents già esistente")
+                return True
+            except:
+                # Crea la collezione Documents
+                self.client.collections.create(
+                    name="Documents",
+                    vectorizer_config=weaviate.classes.config.Configure.Vectorizer.text2vec_transformers(),
+                    properties=[
+                        weaviate.classes.config.Property(name="title", data_type=weaviate.classes.config.DataType.TEXT),
+                        weaviate.classes.config.Property(name="content", data_type=weaviate.classes.config.DataType.TEXT),
+                        weaviate.classes.config.Property(name="source", data_type=weaviate.classes.config.DataType.TEXT),
+                        weaviate.classes.config.Property(name="category", data_type=weaviate.classes.config.DataType.TEXT),
+                        weaviate.classes.config.Property(name="timestamp", data_type=weaviate.classes.config.DataType.DATE),
+                    ]
+                )
+                print("Collezione Documents creata")
+                return True
+            
+        except Exception as e:
+            print(f"Errore setup schema: {e}")
+            return False
+    
+    def process_file(self, filepath: str) -> Dict[str, Any]:
+        collection_name = pathlib.Path(filepath).stem
+        """Processa un file e inserisce i documenti"""
+        try:
+            if ( checkExistingCollection(self.client ,collection_name) ):
+                print(f"Collezione {collection_name} già esistente")
+                return {"status": "success", "inserted": 0, "errors": 0}
+            
+            collection = self.client.collections.get("Documents")
+            inserted = 0
+            errors = 0
+
+            
+
+            if filepath.endswith(('.xlsx', '.xls')):
+                # Approccio flessibile: ogni colonna viene inserita come dato separato
+                try:
+                    # Leggi il file Excel
+                    df = pd.read_excel(filepath, engine='openpyxl' if filepath.endswith('.xlsx') else 'xlrd')
+                    
+                    columns = df.columns.tolist()
+                    print(f"File Excel caricato. Righe: {len(df)}, Colonne: {columns}")
+                    
+                    #Crea mappa a partire dai dati del dataframe
+                    mappings, type_map = deterministic_weaviate_types(df)
+                    # Crea properties da passare a weaviate per la creazione della classe
+                    properties = get_properties_from_map(type_map)
+
+                    createSchema(self.client, collection_name, properties)
+                    print(f"Schema creato per la collezione {collection_name}")
+
+
+                    try:
+                        extractChunksAndInsertIntoWeaviateProgressBar(self.client, collection_name, df)
+                    except Exception as e:
+                        errors += 1
+                        print(f"Errore inserimento file Excel: {e}")
+                                
+                except Exception as e:
+                    return {"inserted": 0, "errors": 1, "status": "error", "error": f"Errore lettura Excel: {str(e)}"}
+                    
+            else:
+                print("Formato file non supportato. Solo Excel (.xlsx, .xls) al momento.")
+                return {"status": "error", "inserted": 0, "errors": 0}
+
+            status_msg = "success"
+            if errors > 0:
+                status_msg = f"partial_success - {errors} errori"
+                
+            return {
+                "inserted": inserted, 
+                "errors": errors,
+                "status": status_msg
+            }
+            
+        except Exception as e:
+            return {"inserted": 0, "errors": 1, "status": "error", "error": str(e)}
+    
+    def _get_safe_value(self, row, column_name: str) -> str:
+        """Estrae il valore dalla riga in modo sicuro"""
+        try:
+            value = row.get(column_name) if hasattr(row, 'get') else row[column_name]
+            if pd.isna(value) or value is None or value == '':
+                return ''
+            return str(value).strip()
+        except (KeyError, IndexError, Exception):
+            return ''
+    
+    def _map_excel_columns(self, columns: List[str]) -> Dict[str, str]:
+        """Mappa automaticamente le colonne Excel ai campi richiesti"""
+        mapping = {"title": None, "content": None, "category": None}
+        
+        # Converti colonne in lowercase per confronto
+        columns_lower = [col.lower() for col in columns]
+        
+        # Mappatura intelligente per TITLE
+        title_keywords = ['title', 'titolo', 'nome', 'name', 'subject', 'oggetto', 'headline']
+        for keyword in title_keywords:
+            for i, col_lower in enumerate(columns_lower):
+                if keyword in col_lower:
+                    mapping['title'] = columns[i]
+                    break
+            if mapping['title']:
+                break
+        
+        # Se non trova title, usa la prima colonna
+        if not mapping['title'] and columns:
+            mapping['title'] = columns[0]
+        
+        # Mappatura intelligente per CONTENT
+        content_keywords = ['content', 'contenuto', 'text', 'testo', 'description', 'descrizione', 
+                           'body', 'message', 'messaggio', 'detail', 'dettaglio', 'summary']
+        for keyword in content_keywords:
+            for i, col_lower in enumerate(columns_lower):
+                if keyword in col_lower and columns[i] != mapping['title']:
+                    mapping['content'] = columns[i]
+                    break
+            if mapping['content']:
+                break
+        
+        # Se non trova content, usa la seconda colonna o la più lunga
+        if not mapping['content'] and len(columns) > 1:
+            remaining_cols = [col for col in columns if col != mapping['title']]
+            mapping['content'] = remaining_cols[0] if remaining_cols else None
+        
+        # Mappatura intelligente per CATEGORY
+        category_keywords = ['category', 'categoria', 'type', 'tipo', 'class', 'classe', 
+                            'tag', 'label', 'etichetta', 'group', 'gruppo']
+        for keyword in category_keywords:
+            for i, col_lower in enumerate(columns_lower):
+                if keyword in col_lower and columns[i] not in [mapping['title'], mapping['content']]:
+                    mapping['category'] = columns[i]
+                    break
+            if mapping['category']:
+                break
+        
+        return mapping
+    
+    def _get_mapped_value(self, row, column_name: str, default: str = '') -> str:
+        """Estrae il valore dalla riga usando il nome della colonna mappata"""
+        if not column_name:
+            return default
+            
+        try:
+            value = row.get(column_name, default)
+            if pd.isna(value) or value is None:
+                return default
+            return str(value).strip()
+        except Exception:
+            return default
+    
+    def list_collections(self) -> List[Dict[str, Any]]:
+        """Lista tutte le collezioni con dettagli completi delle proprietà"""
+        try:
+            collections = []
+            
+            # Ottieni tutte le collezioni esistenti
+            all_collection_names = self.client.collections.list_all()
+            
+            for collection_name in all_collection_names:
+                try:
+                    collection = self.client.collections.get(collection_name)
+                    
+                    # Conta documenti
+                    response = collection.aggregate.over_all(total_count=True)
+                    count = response.total_count
+                    
+                    # Ottieni dettagli completi delle proprietà
+                    property_details = []
+                    properties_count = 0
+                    
+                    try:
+                        # Prova a ottenere un documento di esempio per vedere le proprietà
+                        sample = collection.query.fetch_objects(limit=1)
+                        if sample.objects:
+                            sample_properties = sample.objects[0].properties
+                            properties_count = len(sample_properties.keys())
+                            
+                            # Crea dettagli per ogni proprietà
+                            for prop_name, prop_value in sample_properties.items():
+                                prop_type = self._get_property_type(prop_value)
+                                property_details.append({
+                                    "name": prop_name,
+                                    "type": prop_type,
+                                    "sample_value": str(prop_value)[:50] + "..." if len(str(prop_value)) > 50 else str(prop_value)
+                                })
+                    except:
+                        properties_count = 0
+                        property_details = []
+                    
+                    # Ottieni configurazione vectorizer (se disponibile)
+                    try:
+                        # Per ora usiamo un valore di default
+                        vectorizer = "text2vec-transformers"
+                    except:
+                        vectorizer = "unknown"
+                    
+                    collections.append({
+                        "name": collection_name,
+                        "count": count,
+                        "properties": properties_count,
+                        "property_details": property_details,
+                        "vectorizer": vectorizer
+                    })
+                    
+                except Exception as e:
+                    # Se c'è un errore con una collezione specifica, aggiungi info minime
+                    collections.append({
+                        "name": collection_name,
+                        "count": 0,
+                        "properties": 0,
+                        "property_details": [],
+                        "vectorizer": "error"
+                    })
+            
+            return collections
+            
+        except Exception as e:
+            print(f"Errore nel listare le collezioni: {e}")
+            return []
+    
+    def _get_property_type(self, value) -> str:
+        """Determina il tipo di una proprietà dal suo valore"""
+        if value is None:
+            return "null"
+        elif isinstance(value, bool):
+            return "boolean"
+        elif isinstance(value, int):
+            return "integer"
+        elif isinstance(value, float):
+            return "number"
+        elif isinstance(value, str):
+            if len(value) > 100:
+                return "text"
+            else:
+                return "string"
+        elif isinstance(value, list):
+            return f"array[{len(value)}]"
+        elif isinstance(value, dict):
+            return "object"
+        else:
+            return "unknown"
+    
+    def delete_collection(self, collection_name: str) -> bool:
+        """Elimina una collezione e tutti i suoi dati"""
+        try:
+            # Verifica se la collezione esiste
+            if collection_name not in self.client.collections.list_all():
+                raise ValueError(f"Collezione '{collection_name}' non trovata")
+            
+            # Elimina la collezione
+            self.client.collections.delete(collection_name)
+            print(f"Collezione '{collection_name}' eliminata con successo")
+            return True
+            
+        except Exception as e:
+            print(f"Errore nell'eliminazione della collezione '{collection_name}': {e}")
+            return False
+    
+    def get_collection_sample_data(self, collection_name: str, limit: int = 20) -> Dict[str, Any]:
+        """Ottiene dati campione da una collezione per l'esplorazione"""
+        try:
+            collection = self.client.collections.get(collection_name)
+            
+            # Ottieni statistiche generali
+            response = collection.aggregate.over_all(total_count=True)
+            total_count = response.total_count
+            
+            # Ottieni dati campione
+            sample_response = collection.query.fetch_objects(limit=limit)
+            sample_data = []
+            property_info = []
+            
+            for obj in sample_response.objects:
+                try:
+                    # Estrai le proprietà direttamente dall'oggetto
+                    obj_properties = {}
+                    if hasattr(obj, 'properties') and obj.properties:
+                        obj_properties = obj.properties
+                    
+                    # Ottieni l'UUID se disponibile
+                    obj_id = str(obj.uuid) if hasattr(obj, 'uuid') else "N/A"
+                    
+                    sample_data.append({
+                        "id": obj_id,
+                        "properties": obj_properties
+                    })
+                    
+                    # Raccogli informazioni sulle proprietà dalla prima riga
+                    if not property_info and obj_properties:
+                        for prop_name, prop_value in obj_properties.items():
+                            prop_type = self._get_property_type(prop_value)
+                            property_info.append({
+                                "name": prop_name,
+                                "type": prop_type
+                            })
+                            
+                except Exception as obj_error:
+                    print(f"Errore nel processare oggetto: {obj_error}")
+                    # Aggiungi comunque un oggetto vuoto per mantenere la consistenza
+                    sample_data.append({
+                        "id": "Error",
+                        "properties": {"error": f"Errore nel processare oggetto: {str(obj_error)}"}
+                    })
+                    continue
+            
+            return {
+                "collection_name": collection_name,
+                "total_count": total_count,
+                "sample_data": sample_data,
+                "property_info": property_info,
+                "sample_size": len(sample_data)
+            }
+            
+        except Exception as e:
+            print(f"Errore nel recuperare dati campione per '{collection_name}': {e}")
+            return {
+                "collection_name": collection_name,
+                "error": str(e),
+                "total_count": 0,
+                "sample_data": [],
+                "property_info": [],
+                "sample_size": 0
+            }
+
+    def create_collection(self, name: str, properties: List[Dict[str, Any]]) -> bool:
+        """Crea una nuova collezione"""
+        try:
+            # Conversione proprietà al formato v4
+            props = []
+            for prop in properties:
+                props.append(
+                    weaviate.classes.config.Property(
+                        name=prop["name"], 
+                        data_type=weaviate.classes.config.DataType.TEXT
+                    )
+                )
+            
+            self.client.collections.create(
+                name=name,
+                vectorizer_config=weaviate.classes.config.Configure.Vectorizer.text2vec_transformers(),
+                properties=props
+            )
+            return True
+            
+        except Exception as e:
+            print(f"Errore creazione collezione: {e}")
+            return False
+
+
+
 class ChatHistory:
     """Gestisce la cronologia di una conversazione per mantenere il contesto."""
     def __init__(self, max_history=10):
