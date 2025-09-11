@@ -1,5 +1,8 @@
-# Ambienti virtuali
+# Ambienti virtuale
 neuralTabb/
+#FILE DI CONFIG
 config/
+# Dataset
 dataset/
+# File di log
 python_web_app/__pycache__/

@@ -1,5 +1,44 @@
 
+# modules/weWaviate_manager.py
+import pathlib
+import weaviate
+import json
+import pandas as pd
+from typing import List, Dict, Any
+import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.feature_extraction.text import TfidfVectorizer
+from collections import Counter, defaultdict
+from sklearn.metrics.pairwise import cosine_similarity
+from pandasToWeaviate import  get_properties_from_map, deterministic_weaviate_types
+from weaviateMain import checkExistingCollection, extractChunksAndInsertIntoWeaviateProgressBar, resetSchema, createSchema, createElementData, insertElement
+import re
+import requests
+from datetime import datetime
+import google.generativeai as genai
+import threading
+import time
 
+# Import per le query Weaviate native
+try:
+    from weaviate.classes.query import Filter, Metrics, MetadataQuery
+    from weaviate.classes.aggregate import GroupByAggregate
+except ImportError:
+    print("Avviso: Impossibile importare le classi Weaviate. Assicurati di avere weaviate-client v4+ installato.")
+
+# Per supporto Excel
+try:
+    import openpyxl
+    import xlrd
+except ImportError:
+    print("Avviso: openpyxl e xlrd non installati. Supporto Excel limitato.")
+
+try:
+    import spacy
+    nlp = spacy.load("en_core_web_sm")
+except:
+    nlp = None
 
 
 class ChatHistory:
@@ -375,7 +414,7 @@ class GeminiClient:
                 result += f"  • Valori vuoti: {stats['empty_count']} ({stats['empty_percentage']:.1f}%)\n"
                 result += f"  • Valori presenti: {stats['non_empty_count']}\n"
                 if stats["sample_values"]:
-                    sample_str = ", ".join([str(v)[:50] for v in stats[\'sample_values\']])
+                    sample_str = ", ".join([str(v)[:50] for v in stats["sample_values"]])
                     result += f"  • Esempi valori: {sample_str}\n"
             
             # Se richiesto, rimuovi documenti con troppi valori vuoti
@@ -541,9 +580,9 @@ class GeminiClient:
             if examples:
                 result += f"\n🔍 **Esempi di pulizia:**\n"
                 for example in examples:
-                    result += f"\n**{example[\'property\']}:**\n"
-                    result += f"  Prima:  \'{example[\'before\]}\'\n"
-                    result += f"  Dopo:   \'{example[\'after\]}\'\n"
+                    result += f"\n**{example['property']}:**\n"
+                    result += f"  Prima:  '{example['before']}'\n"
+                    result += f"  Dopo:   '{example['after']}'\n"
             
             if cleaned_count > 0:
                 result += f"\n✅ **Pulizia completata!**\n"
@@ -580,22 +619,22 @@ class GeminiClient:
                     
                     if prop_name not in property_types:
                         if isinstance(prop_value, str):
-                            property_types[prop_name] = \'string\'
+                            property_types[prop_name] = 'string'
                         elif isinstance(prop_value, (int, float)):
-                            property_types[prop_name] = \'number\'
+                            property_types[prop_name] = 'number'
                         elif isinstance(prop_value, bool):
-                            property_types[prop_name] = \'boolean\'
+                            property_types[prop_name] = 'boolean'
                         elif isinstance(prop_value, list):
-                            property_types[prop_name] = \'array\'
+                            property_types[prop_name] = 'array'
                         else:
-                            property_types[prop_name] = \'unknown\'
+                            property_types[prop_name] = 'unknown'
             
             # Validazione
             validation_results = {
-                \'missing_properties\': 0,
-                \'type_mismatches\': 0,
-                \'invalid_values\': 0,
-                \'inconsistent_formats\': 0
+                'missing_properties': 0,
+                'type_mismatches': 0,
+                'invalid_values': 0,
+                'inconsistent_formats': 0
             }
             
             issues_details = []
@@ -606,7 +645,7 @@ class GeminiClient:
                 # Controlla proprietà mancanti
                 missing_props = all_properties - set(doc.properties.keys())
                 if missing_props:
-                    validation_results[\'missing_properties\'] += len(missing_props)
+                    validation_results['missing_properties'] += len(missing_props)
                     issues_details.append(f"Doc {doc_id[:8]}: proprietà mancanti {list(missing_props)[:3]}")
                 
                 # Controlla tipi inconsistenti
@@ -614,24 +653,24 @@ class GeminiClient:
                     expected_type = property_types.get(prop_name)
                     actual_type = type(prop_value).__name__
                     
-                    if expected_type == \'string\' and not isinstance(prop_value, str):
-                        validation_results[\'type_mismatches\'] += 1
+                    if expected_type == 'string' and not isinstance(prop_value, str):
+                        validation_results['type_mismatches'] += 1
                         issues_details.append(f"Doc {doc_id[:8]}: {prop_name} dovrebbe essere stringa, trovato {actual_type}")
                     
-                    elif expected_type == \'number\' and not isinstance(prop_value, (int, float)):
-                        validation_results[\'type_mismatches\'] += 1
+                    elif expected_type == 'number' and not isinstance(prop_value, (int, float)):
+                        validation_results['type_mismatches'] += 1
                         issues_details.append(f"Doc {doc_id[:8]}: {prop_name} dovrebbe essere numero, trovato {actual_type}")
                     
                     # Validazione valori specifici
                     if isinstance(prop_value, str):
                         # Email malformate
-                        if \'email\' in prop_name.lower() and \'@\' in prop_value and \'.\' not in prop_value.split(\'@\')[-1]:
-                            validation_results[\'invalid_values\'] += 1
+                        if 'email' in prop_name.lower() and '@' in prop_value and '.' not in prop_value.split('@')[-1]:
+                            validation_results['invalid_values'] += 1
                             issues_details.append(f"Doc {doc_id[:8]}: email malformata in {prop_name}")
                         
                         # URL malformati
-                        if \'url\' in prop_name.lower() and not (prop_value.startswith(\'http://\') or prop_value.startswith(\'https://\')):
-                            validation_results[\'invalid_values\'] += 1
+                        if 'url' in prop_name.lower() and not (prop_value.startswith('http://') or prop_value.startswith('https://')):
+                            validation_results['invalid_values'] += 1
                             issues_details.append(f"Doc {doc_id[:8]}: URL malformato in {prop_name}")
             
             total_issues = sum(validation_results.values())
@@ -648,7 +687,7 @@ class GeminiClient:
                 result += f"🔍 **Dettaglio problemi:**\n"
                 for issue_type, count in validation_results.items():
                     if count > 0:
-                        issue_name = issue_type.replace(\'_\', \' \').title()
+                        issue_name = issue_type.replace('_', ' ').title()
                         result += f"• {issue_name}: {count}\n"
                 
                 result += f"\n📝 **Primi esempi di problemi:**\n"
@@ -684,7 +723,7 @@ class GeminiClient:
             else:
                 # Estrai solo il numero di duplicati dal risultato
                 import re
-                match = re.search(r\'Duplicati da rimuovere: (\\d+)\\', duplicate_result)
+                match = re.search(r'Duplicati da rimuovere: (\d+)', duplicate_result)
                 if match:
                     result += f"⚠️ Trovati {match.group(1)} duplicati\n\n"
             
@@ -696,7 +735,7 @@ class GeminiClient:
             else:
                 # Estrai info sui valori vuoti
                 import re
-                match = re.search(r\'Proprietà con valori vuoti: (\\d+)\\', empty_result)
+                match = re.search(r'Proprietà con valori vuoti: (\d+)', empty_result)
                 if match:
                     result += f"⚠️ {match.group(1)} proprietà hanno valori vuoti\n\n"
             
@@ -707,7 +746,7 @@ class GeminiClient:
                 result += "✅ Testo già normalizzato correttamente\n\n"
             else:
                 import re
-                match = re.search(r\'Problemi totali rilevati: (\\d+)\\', norm_result)
+                match = re.search(r'Problemi totali rilevati: (\d+)', norm_result)
                 if match:
                     result += f"⚠️ {match.group(1)} problemi di normalizzazione\n\n"
             
@@ -718,7 +757,7 @@ class GeminiClient:
                 result += "✅ Spazi già puliti\n\n"
             else:
                 import re
-                match = re.search(r\'Problemi di spazi rilevati: (\\d+)\\', space_result)
+                match = re.search(r'Problemi di spazi rilevati: (\d+)', space_result)
                 if match:
                     result += f"⚠️ {match.group(1)} problemi di spazi\n\n"
             
@@ -729,16 +768,16 @@ class GeminiClient:
                 result += "✅ Integrità dati confermata\n\n"
             else:
                 import re
-                match = re.search(r\'Problemi totali: (\\d+)\\', validation_result)
+                match = re.search(r'Problemi totali: (\d+)', validation_result)
                 if match:
                     result += f"⚠️ {match.group(1)} problemi di integrità\n\n"
             
             result += "🎯 **Riepilogo Pulizia Generale:**\n"
             result += "La scansione è completata. Per applicare automaticamente le correzioni, usa comandi specifici come:\n"
-            result += "• \'Rimuovi i duplicati\'\n"
-            result += "• \'Pulisci gli spazi bianchi\'\n"
-            result += "• \'Normalizza il testo\'\n"
-            result += "• \'Rimuovi valori vuoti\'\n\n"
+            result += "• 'Rimuovi i duplicati'\n"
+            result += "• 'Pulisci gli spazi bianchi'\n"
+            result += "• 'Normalizza il testo'\n"
+            result += "• 'Rimuovi valori vuoti'\n\n"
             result += "💡 **Suggerimento:** Per una pulizia automatica completa, chiedi: \'Applica tutte le correzioni di pulizia\'"
             
             return result
@@ -776,5 +815,4 @@ class GeminiClient:
             
         except Exception as e:
             return f"🧹 **Errore Pulizia Personalizzata**\n\nErrore nell\'analisi: {str(e)}"
-
 
