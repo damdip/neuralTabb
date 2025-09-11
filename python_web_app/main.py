@@ -8,12 +8,11 @@ from datetime import datetime
 import traceback
 
 # Import dei moduli personalizzati
-from modules import WeaviateManager, QASystemWithGemini
+from modules import WeaviateManager, QASystemWithGemini, SemanticSearch
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-change-this'
 app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['MAX_CONTENT_LENGTH'] = 1000 * 1024 * 1024  # 1000MB max file size (aumentato da 50MB)
+app.config['MAX_CONTENT_LENGTH'] = 1000 * 1024 * 1024  # 1000MB max file size (provvisorio)
 
 # Assicurati che la cartella uploads esista
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -22,6 +21,7 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 try:
     client = weaviate.connect_to_local()
     weaviate_manager = WeaviateManager(client)
+    semantic_search = SemanticSearch(client)
     
     # Inizializza il sistema QA con Gemini
     try:
