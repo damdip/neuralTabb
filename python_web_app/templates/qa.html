@@ -2,87 +2,218 @@
 {% block title %}Q&A{% endblock %}
 {% block content %}
   <h1>🔍 Ricerca Documenti</h1>
-  <form method="post" action="{{ url_for('question_answering') }}">
-    <div class="mb-3">
-      <label for="question" class="form-label">Domanda di ricerca</label>
-      <input class="form-control" id="question" name="question" value="{{ question or '' }}" 
-             placeholder="Inserisci la tua domanda per cercare documenti pertinenti...">
+  
+  <!-- Prima sezione: Selezione collezione -->
+  <div class="card mb-4">
+    <div class="card-header">
+      <h5 class="mb-0">📁 Passo 1: Seleziona la collezione</h5>
     </div>
-    
-    <div class="row">
-      <div class="col-md-8">
-        <div class="mb-3">
-          <label for="collection" class="form-label">Collezione</label>
-          {% if collections and collections|length > 0 %}
-            <select class="form-select" id="collection" name="collection">
-              <option value="">Seleziona una collezione...</option>
-              {% for col in collections %}
-                <option value="{{ col.name }}" 
-                        {% if col.name == (collection or 'Documents') %}selected{% endif %}>
-                  {{ col.name }} ({{ col.count }} documenti)
-                </option>
-              {% endfor %}
-            </select>
-            <div class="form-text">
-              Collezioni disponibili: {{ collections|length }}
+    <div class="card-body">
+      {% if collections and collections|length > 0 %}
+        <div class="row">
+          {% for col in collections %}
+            <div class="col-md-4 mb-3">
+              <div class="card h-100 {% if col.name == collection %}border-primary{% endif %}">
+                <div class="card-body text-center">
+                  <h6 class="card-title">{{ col.name }}</h6>
+                  <p class="card-text">
+                    <span class="badge bg-info">{{ col.count }} documenti</span>
+                  </p>
+                  <button type="button" class="btn {% if col.name == collection %}btn-primary{% else %}btn-outline-primary{% endif %} btn-sm" 
+                          onclick="selectCollection('{{ col.name }}')">
+                    {% if col.name == collection %}✓ Selezionata{% else %}Seleziona{% endif %}
+                  </button>
+                </div>
+              </div>
             </div>
-          {% else %}
-            <!-- Fallback se non ci sono collezioni -->
-            <input class="form-control" id="collection" name="collection" 
-                   value="{{ collection or 'Documents' }}" 
-                   placeholder="Nome collezione">
-            <div class="form-text text-warning">
-              ⚠️ Nessuna collezione trovata. Inserisci manualmente il nome.
-            </div>
-          {% endif %}
+          {% endfor %}
         </div>
-      </div>
-      
-      <div class="col-md-4">
-        <div class="mb-3">
-          <label for="limit" class="form-label">Numero di risultati</label>
-          <select class="form-select" id="limit" name="limit">
-            <option value="5" {% if limit == 5 %}selected{% endif %}>5 risultati</option>
-            <option value="10" {% if limit == 10 %}selected{% endif %}>10 risultati</option>
-            <option value="15" {% if limit == 15 %}selected{% endif %}>15 risultati</option>
-            <option value="20" {% if limit == 20 %}selected{% endif %}>20 risultati</option>
-            <option value="30" {% if limit == 30 %}selected{% endif %}>30 risultati</option>
-            <option value="50" {% if limit == 50 %}selected{% endif %}>50 risultati</option>
-          </select>
-          <div class="form-text">
-            Massimo 50 risultati
+        <div id="selected-collection" class="mt-3" {% if not collection %}style="display: none;"{% endif %}>
+          <div class="alert alert-success">
+            <strong>✓ Collezione selezionata:</strong> <span id="collection-name">{{ collection or '' }}</span>
           </div>
         </div>
-      </div>
+      {% else %}
+        <div class="alert alert-warning">
+          ⚠️ Nessuna collezione trovata. Assicurati che Weaviate sia in esecuzione e contenga dati.
+        </div>
+      {% endif %}
     </div>
-    
-    <button type="submit" class="btn btn-primary">🔍 Cerca Documenti</button>
-  </form>
+  </div>
+
+  <!-- Seconda sezione: Ricerca -->
+  <div class="card">
+    <div class="card-header">
+      <h5 class="mb-0">❓ Passo 2: Fai la tua domanda</h5>
+    </div>
+    <div class="card-body">
+      <form method="post" action="{{ url_for('question_answering') }}">
+        <input type="hidden" id="collection-input" name="collection" value="{{ collection or '' }}">
+        
+        <div class="mb-3">
+          <label for="question" class="form-label">Domanda di ricerca</label>
+          <input class="form-control" id="question" name="question" value="{{ question or '' }}" 
+                 placeholder="Inserisci la tua domanda per cercare documenti pertinenti..."
+                 {% if not collection %}disabled{% endif %}>
+          <div class="form-text">
+            {% if not collection %}
+              Seleziona prima una collezione per abilitare la ricerca
+            {% else %}
+              Cerca documenti nella collezione "{{ collection }}"
+            {% endif %}
+          </div>
+        </div>
+        
+        <div class="row">
+          <div class="col-md-6">
+            <div class="mb-3">
+              <label for="limit" class="form-label">Numero di risultati</label>
+              <select class="form-select" id="limit" name="limit" {% if not collection %}disabled{% endif %}>
+                <option value="5" {% if limit == 5 %}selected{% endif %}>5 risultati</option>
+                <option value="10" {% if limit == 10 %}selected{% endif %}>10 risultati</option>
+                <option value="15" {% if limit == 15 %}selected{% endif %}>15 risultati</option>
+                <option value="20" {% if limit == 20 %}selected{% endif %}>20 risultati</option>
+                <option value="30" {% if limit == 30 %}selected{% endif %}>30 risultati</option>
+                <option value="50" {% if limit == 50 %}selected{% endif %}>50 risultati</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        
+        <button type="submit" class="btn btn-primary" {% if not collection %}disabled{% endif %}>
+          🔍 Cerca Documenti
+        </button>
+      </form>
+    </div>
+  </div>
 
   {% if answer %}
     <hr>
     
-    <div class="alert alert-info">
-      <strong>📊 Risultati della ricerca:</strong> 
-      Trovati {{ answer.total_found }} documenti su {{ answer.limit_used }} richiesti 
-      nella collezione "{{ answer.collection_name }}"
-      {% if answer.query %}
-        <br><strong>Query:</strong> "{{ answer.query }}"
+    <!-- Gestisce sia la struttura con 'sources' che quella con 'documents' -->
+    {% set documents = answer.sources or answer.documents or [] %}
+    {% set collection_name = answer.collection_name or (answer.collection_info.name if answer.collection_info else '') or collection %}
+    
+    <!-- Gestione speciale per risposte conversazionali -->
+    {% if answer.is_conversational or answer.type == 'conversational' %}
+      <div class="alert alert-primary">
+        <h5><i class="fas fa-comments"></i> Risposta Conversazionale</h5>
+        <div class="mt-2" style="white-space: pre-line;">{{ answer.answer }}</div>
+        {% if answer.suggestion %}
+          <div class="mt-3">
+            <small class="text-muted"><strong>Suggerimento:</strong> {{ answer.suggestion }}</small>
+          </div>
+        {% endif %}
+      </div>
+      
+      <!-- Mostra collezioni disponibili per domande di aiuto -->
+      {% if collections and ('aiuto' in question.lower() or 'help' in question.lower() or 'cosa puoi fare' in question.lower()) %}
+        <div class="card mt-3">
+          <div class="card-header">
+            <h6 class="mb-0">📁 Collezioni disponibili per la ricerca</h6>
+          </div>
+          <div class="card-body">
+            <div class="row">
+              {% for col in collections[:6] %}
+                <div class="col-md-4 mb-2">
+                  <div class="card border-light">
+                    <div class="card-body text-center py-2">
+                      <small><strong>{{ col.name }}</strong></small><br>
+                      <span class="badge bg-info">{{ col.count }} doc</span>
+                    </div>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+            {% if collections|length > 6 %}
+              <small class="text-muted">... e altre {{ collections|length - 6 }} collezioni</small>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+      
+    <!-- Gestione per risposte analitiche con fallback -->
+    {% elif answer.type == 'analytical_fallback' %}
+      <div class="alert alert-warning">
+        <h5><i class="fas fa-chart-bar"></i> Domanda Analitica Riconosciuta</h5>
+        <div class="mt-2">{{ answer.answer }}</div>
+        {% if answer.suggestion %}
+          <div class="mt-3">
+            <small><strong>💡 Suggerimento:</strong> {{ answer.suggestion }}</small>
+          </div>
+        {% endif %}
+      </div>
+    
+    <!-- Mostra risultati solo se ci sono effettivamente documenti -->
+    {% elif documents and documents|length > 0 %}
+      <div class="alert alert-success">
+        <strong>✅ Ricerca completata!</strong> 
+        Trovati {{ documents|length }} documenti pertinenti nella collezione "{{ collection_name }}"
+        {% if answer.query %}
+          <br><strong>Query:</strong> "{{ answer.query }}"
+        {% endif %}
+      {% if answer.answer %}
+        <br><strong>Risposta:</strong> {{ answer.answer }}
       {% endif %}
     </div>
     
-    {% if answer.sources and answer.sources|length > 0 %}
-      <div class="card">
+    <!-- Sezione informazioni sulla classificazione AI -->
+    {% if answer.classification_info %}
+      <div class="alert alert-info mt-3">
+        <h6 class="mb-2">🤖 Informazioni sulla classificazione AI</h6>
+        <div class="row">
+          <div class="col-md-6">
+            <strong>Predizione locale:</strong> 
+            <span class="badge bg-secondary">{{ answer.classification_info.local_prediction }}</span>
+          </div>
+          <div class="col-md-6">
+            <strong>Classificazione finale:</strong> 
+            <span class="badge bg-primary">{{ answer.classification_info.final_classification }}</span>
+          </div>
+        </div>
+        {% if answer.classification_info.validation %}
+          <div class="mt-2">
+            {% if answer.classification_info.validation.agrees %}
+              <div class="text-success">
+                <i class="fas fa-check-circle"></i> 
+                <strong>Gemini concorda</strong> con la predizione locale
+                {% if answer.classification_info.validation.confidence %}
+                  (Confidenza: {{ answer.classification_info.validation.confidence }})
+                {% endif %}
+              </div>
+            {% else %}
+              <div class="text-warning">
+                <i class="fas fa-exclamation-triangle"></i> 
+                <strong>Gemini suggerisce una classificazione diversa:</strong> 
+                <span class="badge bg-warning text-dark">{{ answer.classification_info.validation.gemini_classification }}</span>
+                {% if answer.classification_info.validation.confidence %}
+                  (Confidenza: {{ answer.classification_info.validation.confidence }})
+                {% endif %}
+              </div>
+            {% endif %}
+            {% if answer.classification_info.validation.explanation %}
+              <small class="text-muted d-block mt-1">
+                <strong>Spiegazione:</strong> {{ answer.classification_info.validation.explanation }}
+              </small>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+    {% endif %}      <div class="card">
         <div class="card-header">
-          <h5 class="mb-0">📄 Fonti utilizzate ({{ answer.sources|length }} documenti)</h5>
+          <h5 class="mb-0">📄 Documenti trovati ({{ documents|length }})</h5>
         </div>
         <div class="card-body">
-          {% for source in answer.sources %}
+          {% for source in documents %}
             <div class="card mb-3 border-left-primary">
               <div class="card-header bg-light">
                 <strong>📖 Documento {{ loop.index }}</strong>
-                {% if source.distance is defined %}
+                {% if source.relevance is defined %}
+                  <span class="badge bg-success float-end">Rilevanza: {{ "%.1f"|format(source.relevance * 100) }}%</span>
+                {% elif source.distance is defined %}
                   <span class="badge bg-success float-end">Rilevanza: {{ "%.1f"|format((1 - source.distance) * 100) }}%</span>
+                {% elif source.score is defined %}
+                  <span class="badge bg-success float-end">Score: {{ "%.1f"|format(source.score * 100) }}%</span>
                 {% endif %}
                 <br>
                 <small class="text-muted">ID: {{ source.id }}</small>
@@ -90,7 +221,7 @@
               <div class="card-body">
                 <!-- Mostra tutte le proprietà dinamicamente -->
                 {% for prop_name, prop_value in source.items() %}
-                  {% if prop_name not in ['id', 'distance'] %}
+                  {% if prop_name not in ['id', 'distance', 'relevance', 'score'] %}
                     <div class="mb-2 border-bottom pb-2">
                       <strong class="text-primary">{{ prop_name|title|replace('_', ' ') }}:</strong>
                       <div class="mt-1">
@@ -123,46 +254,11 @@
           {% endfor %}
         </div>
       </div>
-      
-      <!-- JavaScript per espandere/contrarre contenuti -->
-      <script>
-        function toggleContent(button) {
-          const container = button.closest('.expandable-content');
-          const preview = container.querySelector('.content-preview');
-          const full = container.querySelector('.content-full');
-          
-          if (preview.style.display === 'none') {
-            // Mostra preview, nascondi full
-            preview.style.display = 'block';
-            full.style.display = 'none';
-          } else {
-            // Mostra full, nascondi preview
-            preview.style.display = 'none';
-            full.style.display = 'block';
-          }
-        }
-      </script>
-      
-      <!-- CSS per migliorare l'aspetto -->
-      <style>
-        .border-left-primary {
-          border-left: 4px solid #007bff !important;
-        }
-        .expandable-content {
-          position: relative;
-        }
-        .expand-btn, .collapse-btn {
-          margin-top: 8px;
-        }
-        .card-body .mb-2:last-child {
-          border-bottom: none !important;
-          padding-bottom: 0 !important;
-        }
-      </style>
     {% else %}
+      <!-- Mostra messaggio di nessun risultato solo se effettivamente non ci sono documenti -->
       <div class="alert alert-warning">
         <strong>⚠️ Nessun documento trovato</strong>
-        <br>Non sono stati trovati documenti pertinenti per la tua ricerca.
+        <br>Non sono stati trovati documenti pertinenti per la tua ricerca nella collezione "{{ collection_name }}".
         {% if answer.error %}
           <br><strong>Errore:</strong> {{ answer.error }}
         {% endif %}
@@ -172,6 +268,7 @@
           <li>Prova a usare parole chiave diverse</li>
           <li>Verifica che la collezione selezionata contenga dati</li>
           <li>Aumenta il numero di risultati da cercare</li>
+          <li>Prova con termini più generali o sinonimi</li>
         </ul>
       </div>
     {% endif %}
@@ -179,9 +276,84 @@
     {% if answer.available_properties %}
       <div class="mt-3">
         <small class="text-muted">
-          Proprietà disponibili nella collezione: {{ answer.available_properties|join(', ') }}
+          <strong>Proprietà disponibili nella collezione:</strong> {{ answer.available_properties|join(', ') }}
         </small>
       </div>
     {% endif %}
   {% endif %}
+
+  <!-- JavaScript per la selezione collezioni e espansione contenuti -->
+  <script>
+    function selectCollection(collectionName) {
+      // Aggiorna il campo nascosto
+      document.getElementById('collection-input').value = collectionName;
+      
+      // Mostra il nome della collezione selezionata
+      document.getElementById('collection-name').textContent = collectionName;
+      document.getElementById('selected-collection').style.display = 'block';
+      
+      // Abilita i campi del form
+      document.getElementById('question').disabled = false;
+      document.getElementById('limit').disabled = false;
+      document.querySelector('button[type="submit"]').disabled = false;
+      
+      // Aggiorna la descrizione del campo
+      const formText = document.querySelector('.form-text');
+      formText.textContent = `Cerca documenti nella collezione "${collectionName}"`;
+      
+      // Aggiorna l'aspetto dei pulsanti
+      document.querySelectorAll('.card .btn').forEach(btn => {
+        btn.classList.remove('btn-primary');
+        btn.classList.add('btn-outline-primary');
+        btn.textContent = 'Seleziona';
+      });
+      
+      // Evidenzia la collezione selezionata
+      document.querySelectorAll('.card').forEach(card => {
+        card.classList.remove('border-primary');
+      });
+      
+      event.target.closest('.card').classList.add('border-primary');
+      event.target.classList.remove('btn-outline-primary');
+      event.target.classList.add('btn-primary');
+      event.target.textContent = '✓ Selezionata';
+    }
+
+    function toggleContent(button) {
+      const container = button.closest('.expandable-content');
+      const preview = container.querySelector('.content-preview');
+      const full = container.querySelector('.content-full');
+      
+      if (preview.style.display === 'none') {
+        // Mostra preview, nascondi full
+        preview.style.display = 'block';
+        full.style.display = 'none';
+      } else {
+        // Mostra full, nascondi preview
+        preview.style.display = 'none';
+        full.style.display = 'block';
+      }
+    }
+  </script>
+
+  <!-- CSS per migliorare l'aspetto -->
+  <style>
+    .border-left-primary {
+      border-left: 4px solid #007bff !important;
+    }
+    .expandable-content {
+      position: relative;
+    }
+    .expand-btn, .collapse-btn {
+      margin-top: 8px;
+    }
+    .card-body .mb-2:last-child {
+      border-bottom: none !important;
+      padding-bottom: 0 !important;
+    }
+    .card.border-primary {
+      border-color: #007bff !important;
+      box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+    }
+  </style>
 {% endblock %}

@@ -8,14 +8,24 @@ from datetime import datetime
 import traceback
 
 # Import dei moduli personalizzati
-from modules import WeaviateManager, QASystemWithGemini, SemanticSearch
+from modules_clean import WeaviateManager, SimpleQASystem, SemanticSearch
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 1000 * 1024 * 1024  # 1000MB max file size (provvisorio)
+app.secret_key = 'neural-tabb-secret-key-2025-change-this-in-production'  # Chiave segreta per le sessioni
 
 # Assicurati che la cartella uploads esista
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# Leggi chiave API Gemini (opzionale)
+gemini_api_key = None
+try:
+    with open('config/configLLM.txt', 'r') as f:
+        gemini_api_key = f.read().strip()
+    print("✅ Chiave API Gemini caricata")
+except:
+    print("⚠️ Chiave API Gemini non trovata - sistema funzionerà solo con classificazione locale")
 
 # Inizializza Weaviate client
 try:
@@ -23,21 +33,18 @@ try:
     weaviate_manager = WeaviateManager(client)
     semantic_search = SemanticSearch(client)
     
-    # Inizializza il sistema QA con Gemini
+    # Inizializza il sistema QA con validazione Gemini opzionale
     try:
-        qa_gemini = QASystemWithGemini(client, api_key_path="config/configLLM.txt")
-        print("Sistema QA con Gemini inizializzato con successo")
+        qa_system = SimpleQASystem(client, gemini_api_key)
+        print("Sistema QA con validazione Gemini inizializzato con successo")
     except Exception as e:
-        print(f"Errore nell'inizializzazione del sistema QA con Gemini: {e}")
-        qa_gemini = None
-    
-    # Crea lo schema se non esistente
-    weaviate_manager.setup_schema()
+        print(f"Errore nell'inizializzazione del sistema QA: {e}")
+        qa_system = None
     
 except Exception as e:
     print(f"Errore connessione Weaviate: {e}")
     client = None
-    qa_gemini = None
+    qa_system = None
 
 @app.route('/')
 def index():
@@ -181,7 +188,7 @@ def question_answering():
                                      limit=limit)
             
             # Usa il sistema QA con Gemini per ottenere i documenti
-            answer = qa_gemini.ask_question(question, collection_name, limit) if qa_gemini else {"error": "Sistema QA non disponibile"}
+            answer = qa_system.ask_question(question, collection_name, limit) if qa_system else {"error": "Sistema QA non disponibile"}
             
             # Log della risposta per debug
             print(f"Documenti trovati: {answer.get('total_found', 0)}")
@@ -216,22 +223,23 @@ def manage_collections():
 
 @app.route('/chat')
 def chat_interface():
-    """Interfaccia di chat per il sistema Q&A con Gemini"""
+    """Interfaccia di chat per il sistema Q&A semplificato"""
     if not client:
         return render_template('error.html', error="Connessione Weaviate non disponibile")
     
-    if not qa_gemini:
-        return render_template('error.html', error="Sistema QA con Gemini non disponibile. Verifica che il file 'chiave.txt' esista.")
+    if not qa_system:
+        return render_template('error.html', error="Sistema QA non disponibile.")
     
     # Ottieni informazioni sul modello corrente
-    model_info = qa_gemini.get_current_model_info() if qa_gemini else {}
+    # Prepara informazioni sui modelli (dummy per compatibilità)
+    model_info = {}
     
     return render_template('chat.html', model_info=model_info)
 
 @app.route('/chat/ask', methods=['POST'])
 def chat_ask():
     """Endpoint API per le domande della chat"""
-    if not client or not qa_gemini:
+    if not client or not qa_system:
         return jsonify({
             'success': False,
             'error': 'Sistema non disponibile'
@@ -249,10 +257,10 @@ def chat_ask():
             })
         
         # Classifica prima la domanda per determinare se serve una collezione
-        question_type = qa_gemini.classify_question(question)
+        question_type = qa_system.classify_question(question)
         
         # Per domande conversazionali non serve una collezione
-        if question_type != "conversazionale":
+        if question_type != "conversational":
             if not collection_name:
                 return jsonify({
                     'success': False,
@@ -274,12 +282,14 @@ def chat_ask():
                     'success': False,
                     'error': f'Errore nel verificare la collezione: {str(e)}'
                 })
+
         
         # Misura il tempo di elaborazione
         start_time = datetime.now()
         
-        # Ottieni la risposta (passa None come collection_name se conversazionale)
-        answer = qa_gemini.smart_answer(question, collection_name if question_type != "conversazionale" else None)
+        # Ottieni la risposta usando il sistema QA semplificato
+        answer_result = qa_system.ask_question(question, collection_name if question_type != "conversational" else None)
+        answer = answer_result.get("answer", "Errore nella risposta")
         
         end_time = datetime.now()
         processing_time = int((end_time - start_time).total_seconds() * 1000)
