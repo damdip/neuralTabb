@@ -203,15 +203,7 @@ def question_answering():
     
     return render_template('qa.html', collections=collections)
 
-@app.route('/collections')
-def manage_collections():
-    """Gestione collezioni"""
-    try:
-        collections = weaviate_manager.list_collections()
-        return render_template('collections.html', collections=collections)
-        
-    except Exception as e:
-        return render_template('error.html', error=str(e))
+
 
 @app.route('/chat')
 def chat_interface():
@@ -303,6 +295,17 @@ def chat_ask():
         })
 
 
+
+@app.route('/collections')
+def manage_collections():
+    """Gestione collezioni"""
+    try:
+        collections = weaviate_manager.list_collections()
+        return render_template('collections.html', collections=collections)
+        
+    except Exception as e:
+        return render_template('error.html', error=str(e))
+
 @app.route('/api/collections')
 def api_collections():
     """API endpoint per ottenere la lista delle collezioni"""
@@ -373,7 +376,6 @@ def explore_collection(collection_name):
     except Exception as e:
         return render_template('error.html', error=str(e))
 
-
 @app.route('/api/collections/<collection_name>/data')
 def api_collection_data(collection_name):
     """API endpoint per ottenere dati paginati di una collezione"""
@@ -404,7 +406,6 @@ def api_collection_data(collection_name):
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
-
 
 @app.errorhandler(413)
 def request_entity_too_large(error):

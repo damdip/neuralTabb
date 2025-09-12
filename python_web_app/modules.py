@@ -541,7 +541,7 @@ class QASystemWithGemini:
         }
 
     def classify_question(self, question: str) -> str:
-        """Classifica la domanda usando pattern locali per ridurre i costi di Gemini."""
+        """Classifica la domanda usando pattern locali per ridurre i costi di Gemini.
         question_lower = question.lower()
         
         # Classificazione locale basata su parole chiave (veloce e gratuita)
@@ -589,13 +589,13 @@ class QASystemWithGemini:
         
         if any(pattern in question_lower for pattern in integration_patterns):
             return "integrazione"
-        
+        """
         # Solo per casi molto ambigui usiamo Gemini (riduce del 90% le chiamate)
-        if len(question.split()) > 15:  # Solo per domande molto lunghe
-            return self._classify_with_gemini(question)
+        #if len(question.split()) > 15:  # Solo per domande molto lunghe
+        return self._classify_with_gemini(question)
         
         # Default: generale (per domande sui contenuti)
-        return "generale"
+        #return "generale"
     
     def _classify_with_gemini(self, question: str) -> str:
         """Usa Gemini solo per classificazioni complesse (fallback)."""
@@ -669,9 +669,9 @@ class QASystemWithGemini:
         """
         try:
             collection = self.client.collections.get(class_name)
-            props_info = self._get_collection_properties(collection)
-
-            intent = self._parse_analytical_intent(question, props_info)
+            properties_info = self._get_collection_properties(collection)
+            """
+            intent = self._parse_analytical_intent(question, properties_info)
             if intent is None:
                 # Prova un conteggio semantico come fallback
                 try:
@@ -708,6 +708,15 @@ class QASystemWithGemini:
                 return self._format_weaviate_response(resp, question)
 
             return "Operazione analitica non supportata al momento."
+            """
+
+            elements_involved = askGeminiHowManyElementsInvolved(question)
+            
+            properties_involed = askGeminiAboutPropertiesInvolved(question, properties_info)
+
+            performWeaviateQueries(question, elements_involved, properties_info)
+
+
 
         except Exception as e:
             print(f"Errore handle_analytical_question: {e}")
@@ -1092,7 +1101,7 @@ class QASystemWithGemini:
         try:
             collection = self.client.collections.get(class_name)
             
-            # Ottieni le proprietà effettive della collezione
+            # Ottieni le proprietà della collezione
             props_info = self._get_collection_properties(collection)
             available_props = list(props_info.keys())
             
@@ -1101,12 +1110,17 @@ class QASystemWithGemini:
             
             # Scegli le proprietà migliori per la ricerca (max 3 per ridurre token)
             search_props = self._select_best_search_properties(available_props)
+            #aggiungi questo:  ----> search_props = self.select_best_search_properties_with_gemini(available_props)
+            
+            elements_involved = askGeminiHowManyElementsInvolved(question)
+            properties_involed = askGeminiAboutPropertiesInvolved(question, props_info)
+
             
             # Cerca documenti pertinenti
             result = collection.query.near_text(
                 query=question,
-                limit=2,  # Ridotto per ottimizzare performance
-                return_properties=search_props
+                limit= elements_involved ,  # Ridotto per ottimizzare performance
+                return_properties=properties_involed
             )
             
             if not result.objects:
@@ -1147,6 +1161,8 @@ Risposta breve e diretta:"""
         except Exception as e:
             return f"Errore nell'analisi della collezione '{class_name}': {e}"
 
+
+    ##da eliminare
     def _select_best_search_properties(self, available_props: list) -> list:
         """Seleziona le migliori proprietà per la ricerca semantica."""
         # Ordina per preferenza le proprietà più utili per la ricerca
@@ -1177,6 +1193,8 @@ Risposta breve e diretta:"""
                 selected_props.append(prop)
         
         return selected_props[:3] if selected_props else available_props[:3]
+
+
 
     def handle_cleaning_question(self, question: str, class_name: str = None) -> str:
         """Gestisce domande di pulizia dati con operazioni reali sui dati."""
@@ -1934,10 +1952,7 @@ Questa funzionalità avanzata sarà presto disponibile! 🚀
             # Verifica che la collezione esista (se specificata)
             if collection_name:
                 try:
-                    manager = WeaviateManager(self.client)
-                    collections = manager.list_collections()
-                    collection_names = [col.get('name') for col in collections]
-                    if collection_name not in collection_names:
+                    if  not self.client.collections.exists(collection_name):
                         return {
                             'answer': f"❌ **Collezione non trovata**\n\nLa collezione '{collection_name}' non esiste. Collezioni disponibili: {', '.join(collection_names)}",
                             'type': "error", 
@@ -1959,10 +1974,10 @@ Questa funzionalità avanzata sarà presto disponibile! 🚀
             elif question_type == "pulizia":
                 answer = self.handle_cleaning_question(question, collection_name)
                 response_type = "cleaning"
-            elif question_type == "integrazione":
+            elif question_type == "estrazione":
                 # Per ora usiamo la gestione generale per le integrazioni
                 answer = self.handle_general_question(question, collection_name)
-                response_type = "integration"
+                response_type = "knowledge_extraction"
             else:  # general/semantic
                 answer = self.handle_general_question(question, collection_name)
                 response_type = "semantic"
