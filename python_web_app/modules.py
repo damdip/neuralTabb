@@ -46,31 +46,14 @@ class WeaviateManager:
         self.client = client
     
     def setup_schema(self):
-        """Crea gli schemi di base"""
+        """Non crea più schemi hardcoded - usa solo collezioni esistenti"""
         try:
-            # Controlla se la collezione Documents esiste già
-            try:
-                collection = self.client.collections.get("Documents")
-                print("Collezione Documents già esistente")
-                return True
-            except:
-                # Crea la collezione Documents
-                self.client.collections.create(
-                    name="Documents",
-                    vectorizer_config=weaviate.classes.config.Configure.Vectorizer.text2vec_transformers(),
-                    properties=[
-                        weaviate.classes.config.Property(name="title", data_type=weaviate.classes.config.DataType.TEXT),
-                        weaviate.classes.config.Property(name="content", data_type=weaviate.classes.config.DataType.TEXT),
-                        weaviate.classes.config.Property(name="source", data_type=weaviate.classes.config.DataType.TEXT),
-                        weaviate.classes.config.Property(name="category", data_type=weaviate.classes.config.DataType.TEXT),
-                        weaviate.classes.config.Property(name="timestamp", data_type=weaviate.classes.config.DataType.DATE),
-                    ]
-                )
-                print("Collezione Documents creata")
-                return True
-            
+            # Verifica solo la connessione a Weaviate
+            collections = self.client.collections.list_all()
+            print(f"Connessione verificata: {len(collections)} collezioni disponibili")
+            return True
         except Exception as e:
-            print(f"Errore setup schema: {e}")
+            print(f"Errore connessione Weaviate: {e}")
             return False
     
     def process_file(self, filepath: str) -> Dict[str, Any]:
@@ -81,7 +64,6 @@ class WeaviateManager:
                 print(f"Collezione {collection_name} già esistente")
                 return {"status": "success", "inserted": 0, "errors": 0}
             
-            collection = self.client.collections.get("Documents")
             inserted = 0
             errors = 0
 
@@ -408,7 +390,7 @@ class QASystem:
     def __init__(self, client):
         self.client = client
     
-    def ask_question(self, question: str, collection_name: str = "Documents", limit: int = 5) -> Dict[str, Any]:
+    def ask_question(self, question: str, collection_name: str, limit: int = 5) -> Dict[str, Any]:
         """Cerca documenti in base a una domanda"""
         try:
             # Ricerca semantica sui documenti della collezione scelta
@@ -465,7 +447,7 @@ class QASystem:
                 "error": str(e)
             }
     
-    def search_documents(self, query: str, collection_name: str = "Documents", limit: int = 10) -> List[Dict[str, Any]]:
+    def search_documents(self, query: str, collection_name: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Ricerca documenti per query"""
         try:
             collection = self.client.collections.get(collection_name)
@@ -971,6 +953,66 @@ class QASystemWithGemini:
         except Exception:
             return ''
 
+    def _format_weaviate_response(self, response, question: str) -> str:
+        """Formatta le risposte di Weaviate in formato leggibile."""
+        try:
+            # Gestisci diversi tipi di risposta di Weaviate
+            if hasattr(response, 'objects') and response.objects:
+                # Query con oggetti (fetch_objects, near_text, etc.)
+                results = []
+                for i, obj in enumerate(response.objects[:10], 1):  # Limita a 10 risultati
+                    obj_data = []
+                    if hasattr(obj, 'properties') and obj.properties:
+                        for key, value in obj.properties.items():
+                            if value is not None and str(value).strip():
+                                # Tronca valori molto lunghi
+                                value_str = str(value)
+                                if len(value_str) > 100:
+                                    value_str = value_str[:100] + "..."
+                                obj_data.append(f"**{key}**: {value_str}")
+                    
+                    if obj_data:
+                        results.append(f"**{i}.** " + " | ".join(obj_data))
+                
+                if results:
+                    total = len(response.objects)
+                    header = f"🔍 **Risultati per:** {question}\n\n"
+                    if total > 10:
+                        header += f"**Mostro i primi 10 di {total} risultati:**\n\n"
+                    else:
+                        header += f"**{total} risultat{'o' if total == 1 else 'i'} trovat{'o' if total == 1 else 'i'}:**\n\n"
+                    
+                    return header + "\n\n".join(results)
+                else:
+                    return f"❌ **Nessun risultato trovato** per: {question}"
+            
+            elif hasattr(response, 'groups') and response.groups:
+                # Aggregazioni con raggruppamento
+                results = []
+                for group in response.groups[:20]:  # Limita a 20 gruppi
+                    group_by = group.grouped_by.value if hasattr(group.grouped_by, 'value') else str(group.grouped_by)
+                    count = group.total_count if hasattr(group, 'total_count') else 'N/A'
+                    results.append(f"**{group_by}**: {count}")
+                
+                if results:
+                    header = f"📊 **Raggruppamento per:** {question}\n\n"
+                    return header + "\n".join(results)
+                else:
+                    return f"❌ **Nessun gruppo trovato** per: {question}"
+            
+            elif hasattr(response, 'total_count'):
+                # Semplice conteggio
+                count = response.total_count
+                return f"🔢 **Risultato conteggio**: {count} element{'o' if count == 1 else 'i'}"
+            
+            else:
+                # Fallback per tipi di risposta non gestiti
+                return f"📋 **Risposta**: {str(response)}"
+                
+        except Exception as e:
+            print(f"Errore nel formattare la risposta Weaviate: {e}")
+            return f"❌ **Errore nella formattazione**: {str(e)}"
+
 
     def handle_conversational_question(self, question: str, class_name: str = None) -> str:
         """Gestisce domande conversazionali come saluti, ringraziamenti e domande sul sistema."""
@@ -1046,34 +1088,55 @@ class QASystemWithGemini:
             return "Ciao! 😊 Sono NeuralTabb, il tuo assistente per l'analisi dei dati. Come posso aiutarti oggi?"
 
     def handle_general_question(self, question: str, class_name: str) -> str:
-        """RAG ottimizzato con prompt compatti per ridurre i costi."""
+        """RAG ottimizzato con proprietà dinamiche basate sullo schema effettivo."""
         try:
             collection = self.client.collections.get(class_name)
             
-            # Cerca documenti pertinenti (limitato a 2 per ridurre token)
+            # Ottieni le proprietà effettive della collezione
+            props_info = self._get_collection_properties(collection)
+            available_props = list(props_info.keys())
+            
+            if not available_props:
+                return f"La collezione '{class_name}' non ha proprietà disponibili."
+            
+            # Scegli le proprietà migliori per la ricerca (max 3 per ridurre token)
+            search_props = self._select_best_search_properties(available_props)
+            
+            # Cerca documenti pertinenti
             result = collection.query.near_text(
                 query=question,
-                limit=2,  # Ridotto da 3 a 2
-                return_properties=["title", "content"]  # Solo proprietà essenziali
+                limit=2,  # Ridotto per ottimizzare performance
+                return_properties=search_props
             )
             
             if not result.objects:
-                return "Non ho trovato informazioni pertinenti per la tua domanda nei dati."
+                return f"Non ho trovato informazioni pertinenti per la tua domanda nella collezione '{class_name}'."
 
-            # Estrai solo il contenuto essenziale (limita i token)
+            # Estrai il contenuto dalle proprietà disponibili
             contexts = []
             for doc in result.objects:
-                content = doc.properties.get('content', '')
-                if len(content) > 300:  # Tronca contenuti molto lunghi
-                    content = content[:300] + "..."
-                contexts.append(content)
+                doc_content = []
+                for prop in search_props:
+                    value = doc.properties.get(prop, '')
+                    if value and str(value).strip():
+                        # Tronca contenuti molto lunghi
+                        value_str = str(value)
+                        if len(value_str) > 200:
+                            value_str = value_str[:200] + "..."
+                        doc_content.append(f"{prop}: {value_str}")
+                
+                if doc_content:
+                    contexts.append(" | ".join(doc_content))
+            
+            if not contexts:
+                return f"I documenti trovati nella collezione '{class_name}' non contengono informazioni utili."
             
             context = "\n".join(contexts)
             
-            # Prompt molto compatto (80% più breve del precedente)
-            prompt = f"""Basato su questi dati, rispondi: "{question}"
+            # Prompt compatto con informazioni sulla collezione
+            prompt = f"""Basato sui dati della collezione "{class_name}", rispondi: "{question}"
 
-Dati:
+Dati disponibili:
 {context}
 
 Risposta breve e diretta:"""
@@ -1082,7 +1145,38 @@ Risposta breve e diretta:"""
             return response.text.strip()
             
         except Exception as e:
-            return f"Errore nell'analisi: {e}"
+            return f"Errore nell'analisi della collezione '{class_name}': {e}"
+
+    def _select_best_search_properties(self, available_props: list) -> list:
+        """Seleziona le migliori proprietà per la ricerca semantica."""
+        # Ordina per preferenza le proprietà più utili per la ricerca
+        preferred_order = [
+            # Proprietà di contenuto testuale
+            'content', 'contenuto', 'text', 'testo', 'description', 'descrizione',
+            'summary', 'abstract', 'body', 'details', 'info', 'information',
+            # Proprietà di titolo/nome
+            'title', 'titolo', 'name', 'nome', 'heading', 'subject', 'oggetto',
+            # Altre proprietà testuali
+            'category', 'categoria', 'type', 'tipo', 'genre', 'genere'
+        ]
+        
+        selected_props = []
+        available_lower = [prop.lower() for prop in available_props]
+        
+        # Prima aggiungi le proprietà preferite che esistono
+        for pref in preferred_order:
+            for i, prop_lower in enumerate(available_lower):
+                if pref in prop_lower and available_props[i] not in selected_props:
+                    selected_props.append(available_props[i])
+                    if len(selected_props) >= 3:  # Limite a 3 proprietà
+                        return selected_props
+        
+        # Se non ne abbiamo abbastanza, aggiungi altre proprietà testuali
+        for prop in available_props:
+            if prop not in selected_props and len(selected_props) < 3:
+                selected_props.append(prop)
+        
+        return selected_props[:3] if selected_props else available_props[:3]
 
     def handle_cleaning_question(self, question: str, class_name: str = None) -> str:
         """Gestisce domande di pulizia dati con operazioni reali sui dati."""
@@ -1813,4 +1907,88 @@ Questa funzionalità avanzata sarà presto disponibile! 🚀
             
         except Exception as e:
             return f"🧹 **Errore Pulizia Personalizzata**\n\nErrore nell'analisi: {str(e)}"
+
+    def smart_answer(self, question: str, collection_name: str = None) -> Dict[str, Any]:
+        """
+        Metodo principale per rispondere alle domande con classificazione intelligente
+        e gestione ottimizzata delle performance con GeminiValidator.
+        """
+        start_time = time.time()
+        
+        try:
+            # Classifica la domanda
+            question_type = self.classify_question(question)
+            self._track_gemini_call(len(question))
+            
+            # Per domande che richiedono dati, verifica che ci sia una collezione
+            if question_type in ["analitica", "pulizia", "generale", "integrazione"] and not collection_name:
+                return {
+                    'answer': "❌ **Collezione richiesta**\n\nPer questo tipo di domanda devi selezionare una collezione che contenga i dati da analizzare.",
+                    'type': "error",
+                    'question': question,
+                    'collection': None,
+                    'response_time': round(time.time() - start_time, 2),
+                    'error': "Collezione non specificata"
+                }
+                
+            # Verifica che la collezione esista (se specificata)
+            if collection_name:
+                try:
+                    manager = WeaviateManager(self.client)
+                    collections = manager.list_collections()
+                    collection_names = [col.get('name') for col in collections]
+                    if collection_name not in collection_names:
+                        return {
+                            'answer': f"❌ **Collezione non trovata**\n\nLa collezione '{collection_name}' non esiste. Collezioni disponibili: {', '.join(collection_names)}",
+                            'type': "error", 
+                            'question': question,
+                            'collection': collection_name,
+                            'response_time': round(time.time() - start_time, 2),
+                            'error': f"Collezione '{collection_name}' non trovata"
+                        }
+                except Exception as e:
+                    print(f"Errore controllo collezione: {e}")
+            
+            # Gestisci in base al tipo
+            if question_type == "analitica":
+                answer = self.handle_analytical_question(question, collection_name)
+                response_type = "analytical"
+            elif question_type == "conversazionale":
+                answer = self.handle_conversational_question(question, collection_name)
+                response_type = "conversational"
+            elif question_type == "pulizia":
+                answer = self.handle_cleaning_question(question, collection_name)
+                response_type = "cleaning"
+            elif question_type == "integrazione":
+                # Per ora usiamo la gestione generale per le integrazioni
+                answer = self.handle_general_question(question, collection_name)
+                response_type = "integration"
+            else:  # general/semantic
+                answer = self.handle_general_question(question, collection_name)
+                response_type = "semantic"
+            
+            # Calcola tempo di risposta
+            response_time = time.time() - start_time
+            
+            # Formato di risposta standard
+            return {
+                'answer': answer,
+                'type': response_type,
+                'question': question,
+                'collection': collection_name,
+                'response_time': round(response_time, 2),
+                'model_info': self.get_current_model_info(),
+                'usage_stats': self.get_usage_stats()
+            }
+            
+        except Exception as e:
+            error_time = time.time() - start_time
+            return {
+                'answer': f"❌ **Errore nel processamento**\n\nSi è verificato un errore: {str(e)}",
+                'type': "error",
+                'question': question,
+                'collection': collection_name,
+                'response_time': round(error_time, 2),
+                'error': str(e)
+            }
 

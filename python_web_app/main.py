@@ -8,7 +8,7 @@ from datetime import datetime
 import traceback
 
 # Import dei moduli personalizzati
-from modules import WeaviateManager, QASystemWithGemini, SemanticSearch
+from modules import WeaviateManager, QASystemWithGemini
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -21,7 +21,6 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 try:
     client = weaviate.connect_to_local()
     weaviate_manager = WeaviateManager(client)
-    semantic_search = SemanticSearch(client)
     
     # Inizializza il sistema QA con Gemini
     try:
@@ -180,8 +179,8 @@ def question_answering():
                                      collections=collections,
                                      limit=limit)
             
-            # Usa il sistema QA con Gemini per ottenere i documenti
-            answer = qa_gemini.ask_question(question, collection_name, limit) if qa_gemini else {"error": "Sistema QA non disponibile"}
+            # Usa il sistema QA con Gemini per ottenere una risposta intelligente
+            answer = qa_gemini.smart_answer(question, collection_name) if qa_gemini else {"error": "Sistema QA non disponibile"}
             
             # Log della risposta per debug
             print(f"Documenti trovati: {answer.get('total_found', 0)}")
@@ -279,7 +278,10 @@ def chat_ask():
         start_time = datetime.now()
         
         # Ottieni la risposta (passa None come collection_name se conversazionale)
-        answer = qa_gemini.smart_answer(question, collection_name if question_type != "conversazionale" else None)
+        result = qa_gemini.smart_answer(question, collection_name if question_type != "conversazionale" else None)
+        
+        # Estrai la risposta testuale dal risultato
+        answer = result.get('answer', 'Nessuna risposta disponibile') if isinstance(result, dict) else str(result)
         
         end_time = datetime.now()
         processing_time = int((end_time - start_time).total_seconds() * 1000)

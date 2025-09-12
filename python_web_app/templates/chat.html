@@ -436,6 +436,15 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     function formatResponse(text) {
+        // Assicurati che text sia una stringa
+        if (typeof text !== 'string') {
+            if (typeof text === 'object' && text !== null) {
+                text = JSON.stringify(text, null, 2);
+            } else {
+                text = String(text || '');
+            }
+        }
+        
         // Cerca pattern JSON e formattali
         if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
             try {
