@@ -384,7 +384,20 @@ class WeaviateManager:
             print(f"Errore creazione collezione: {e}")
             return False
 
-
+    def count_objects(self, collection_name: str) -> int:
+        """Conta rapidamente il numero di oggetti in una collezione usando aggregazione."""
+        try:
+            if not self.client.collections.exists(collection_name):
+                return 0
+                
+            collection = self.client.collections.get(collection_name)
+            response = collection.aggregate.over_all(total_count=True)
+            
+            return response.total_count
+            
+        except Exception as e:
+            print(f"Errore nel conteggio veloce per collezione '{collection_name}': {e}")
+            return 0
 
 class QASystem:
     def __init__(self, client):
@@ -483,12 +496,14 @@ class QASystem:
 
 
 
+
+
 class QASystemWithGemini:
     def __init__(self, client, api_key_path="/config/configLLM.txt"):
         self.client = client
         self.gemini_call_count = 0  # Contatore per monitorare le chiamate
         self.tokens_saved = 0       # Stima token risparmiati
-        
+        self.weaviateManager = WeaviateManager(client)
         try:
             with open(api_key_path, 'r') as f:
                 api_key = f.read().strip()
@@ -539,6 +554,107 @@ class QASystemWithGemini:
             "estimated_tokens_saved": self.tokens_saved,
             "model_used": getattr(self, 'current_model_name', 'Unknown')
         }
+
+
+    def askGeminiHowManyElementsInvolved(self, question: str, collection_items) -> int:
+        """Chiede a Gemini quanti elementi/documenti dovrebbero essere coinvolti nella risposta."""
+        try:
+            # Usa l'istanza del modello dalla classe
+            prompt = f"""
+            Analizza questa domanda e determina quanti documenti/elementi dovrebbero essere recuperati dal database per rispondere adeguatamente:
+            
+            Domanda: "{question}"
+
+            Rispondi SOLO con un numero intero tra 1 e {collection_items}.
+            """
+            
+            
+            response = self.model.generate_content(prompt)
+            
+            # Estrai il numero dalla risposta
+            import re
+            numbers = re.findall(r'\b(\d{1,3})\b', response.text.strip())
+            
+            return int(numbers[0]) if numbers else 15  # Fallback sicuro
+                
+        except Exception as e:
+            print(f"Errore askGeminiHowManyElementsInvolved: {e}")
+            return 15  # Fallback sicuro
+    
+
+    def askGeminiAboutPropertiesInvolved(self, question: str, properties_info: dict) -> list:
+        """Chiede a Gemini quali proprietà sono rilevanti per rispondere alla domanda."""
+        try:
+            if not hasattr(self, 'model'):
+                return properties_info.get('all', [])[:3]  # Fallback sicuro
+                
+            all_properties = properties_info.get('all', [])
+            text_properties = properties_info.get('text', [])
+            number_properties = properties_info.get('number', [])
+            
+            if not all_properties:
+                return []
+                
+            prompt = f"""
+            Analizza questa domanda e seleziona le proprietà più rilevanti per rispondere:
+            
+            Domanda: "{question}"
+            
+            PROPRIETÀ DISPONIBILI: {all_properties}
+            
+            Seleziona le proprietà più rilevanti che potrebbero contenere informazioni utili per rispondere alla domanda.
+            
+            Rispondi con una lista di nomi di proprietà separati da virgole, SOLO nomi esistenti dalla lista fornita.
+            Esempio: title, content, category
+            """
+            
+            response = self.model.generate_content(prompt)
+            
+            # Estrai le proprietà dalla risposta
+            response_text = response.text.strip().lower()
+            selected_properties = []
+            
+            # Cerca le proprietà menzionate nella risposta
+            for prop in all_properties:
+                if prop.lower() in response_text:
+                    selected_properties.append(prop)
+            
+            
+            # Limita a massimo 4 proprietà per non sovraccaricare
+            return selected_properties
+            
+        except Exception as e:
+            print(f"Errore askGeminiAboutPropertiesInvolved: {e}")
+            # Fallback intelligente
+            all_props = properties_info.get('all', [])
+            return all_props[:3] if all_props else []
+
+
+    def performWeaviateQueries(self, question: str, elements_involved: int, properties_involved: dict) -> str:
+        """Esegue query Weaviate ottimizzate e formatta la risposta."""
+        print(f"Ecco la domanda {question}, gli elementi coinvolti {elements_involved}, le proprietà coinvolte {properties_involved}")
+        try:
+            if not hasattr(self, 'client'):
+                return "Errore: client Weaviate non disponibile"
+                
+            # Determina il tipo di query dalla domanda
+            question_lower = question.lower()
+            
+            # Query di conteggio
+            if any(word in question_lower for word in ['quanti', 'quante', 'count', 'how many', 'numero di']):
+                #return self._perform_count_query(question, elements_involved, properties_involved)
+                return "Funzionalità di conteggio non ancora implementata."
+            # Query di raggruppamento
+            elif any(word in question_lower for word in ['raggruppa', 'group by', 'per categoria', 'by category']):
+                #return self._perform_group_query(question, elements_involved, properties_involved)
+                return "Funzionalità di raggruppamento non ancora implementata."
+            # Query di ricerca con filtri
+            elif any(word in question_lower for word in ['trova', 'search', 'where', 'con', 'che hanno', 'filter']):
+                #return self._perform_filtered_search(question, elements_involved, properties_involved)
+                return "Funzionalità di ricerca con filtri non ancora implementata."
+        except Exception as e:
+            return f"Errore nell'esecuzione della query: {str(e)}"
+
 
     def classify_question(self, question: str) -> str:
         """Classifica la domanda usando pattern locali per ridurre i costi di Gemini.
@@ -615,7 +731,6 @@ class QASystemWithGemini:
         
         # Fallback sicuro
         return "generale"
-
 
 
     def get_current_model_info(self) -> dict:
@@ -710,12 +825,12 @@ class QASystemWithGemini:
             return "Operazione analitica non supportata al momento."
             """
 
-            elements_involved = askGeminiHowManyElementsInvolved(question)
+            elements_involved = self.askGeminiHowManyElementsInvolved(question, self.weaviateManager.count_objects(class_name))
             
-            properties_involed = askGeminiAboutPropertiesInvolved(question, properties_info)
+            properties_involved = self.askGeminiAboutPropertiesInvolved(question, properties_info)
 
-            performWeaviateQueries(question, elements_involved, properties_info)
-
+            answer = self.performWeaviateQueries(question, elements_involved, properties_involved)
+            return answer
 
 
         except Exception as e:
@@ -1112,8 +1227,8 @@ class QASystemWithGemini:
             search_props = self._select_best_search_properties(available_props)
             #aggiungi questo:  ----> search_props = self.select_best_search_properties_with_gemini(available_props)
             
-            elements_involved = askGeminiHowManyElementsInvolved(question)
-            properties_involed = askGeminiAboutPropertiesInvolved(question, props_info)
+            elements_involved = self.askGeminiHowManyElementsInvolved(question, self.weaviateManager.count_objects(class_name))
+            properties_involed = self.askGeminiAboutPropertiesInvolved(question, props_info)
 
             
             # Cerca documenti pertinenti
@@ -1193,7 +1308,6 @@ Risposta breve e diretta:"""
                 selected_props.append(prop)
         
         return selected_props[:3] if selected_props else available_props[:3]
-
 
 
     def handle_cleaning_question(self, question: str, class_name: str = None) -> str:
