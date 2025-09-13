@@ -3,6 +3,7 @@ import pathlib
 import weaviate
 import json
 import pandas as pd
+import os
 from typing import List, Dict, Any
 import numpy as np
 from sklearn.cluster import KMeans
@@ -555,7 +556,6 @@ class QASystemWithGemini:
             "model_used": getattr(self, 'current_model_name', 'Unknown')
         }
 
-
     def askGeminiHowManyElementsInvolved(self, question: str, collection_items) -> int:
         """Chiede a Gemini quanti elementi/documenti dovrebbero essere coinvolti nella risposta."""
         try:
@@ -581,7 +581,6 @@ class QASystemWithGemini:
             print(f"Errore askGeminiHowManyElementsInvolved: {e}")
             return 15  # Fallback sicuro
     
-
     def askGeminiAboutPropertiesInvolved(self, question: str, properties_info: dict) -> list:
         """Chiede a Gemini quali proprietà sono rilevanti per rispondere alla domanda."""
         try:
@@ -629,7 +628,6 @@ class QASystemWithGemini:
             all_props = properties_info.get('all', [])
             return all_props[:3] if all_props else []
 
-
     def performWeaviateQueries(self, question: str, elements_involved: int, properties_involved: dict) -> str:
         """Esegue query Weaviate ottimizzate e formatta la risposta."""
         print(f"Ecco la domanda {question}, gli elementi coinvolti {elements_involved}, le proprietà coinvolte {properties_involved}")
@@ -655,57 +653,8 @@ class QASystemWithGemini:
         except Exception as e:
             return f"Errore nell'esecuzione della query: {str(e)}"
 
-
     def classify_question(self, question: str) -> str:
-        """Classifica la domanda usando pattern locali per ridurre i costi di Gemini.
-        question_lower = question.lower()
         
-        # Classificazione locale basata su parole chiave (veloce e gratuita)
-        
-        # Parole chiave conversazionali
-        conversational_patterns = [
-            "ciao", "salve", "buongiorno", "buonasera", "hello", "hi", "hey",
-            "grazie", "thank", "prego", "scusa", "scusami", "sorry",
-            "come stai", "come va", "tutto bene", "how are you",
-            "chi sei", "cosa sei", "come funzioni", "cosa fai", "come fai", "what are you",
-            "aiuto", "help", "guida", "istruzioni", "supporto",
-            "arrivederci", "addio", "bye", "ciao ciao", "goodbye"
-        ]
-        
-        if any(pattern in question_lower for pattern in conversational_patterns):
-            return "conversazionale"
-        
-        # Parole chiave analitiche (query precise sui dati)
-        analytical_patterns = [
-            "quanti", "quanto", "conta", "count", "elenca", "lista", "list", "mostra", "show",
-            "trova", "search", "cerca", "find", "filtra", "filter", "dove", "where", "quando", "when",
-            "maggiore", "minore", "greater", "less", "primo", "ultimo", "first", "last",
-            "media", "average", "somma", "sum", "totale", "total", "numero di", "number of"
-        ]
-        
-        if any(pattern in question_lower for pattern in analytical_patterns):
-            return "analitica"
-        
-        # Parole chiave pulizia
-        cleaning_patterns = [
-            "pulisci", "clean", "rimuovi duplicati", "duplicati", "duplicates", "remove duplicates",
-            "correggi", "fix", "correzione", "normalizza", "normalize", "standardizza",
-            "valida", "validate", "formatta", "format", "elimina spazi", "trim spaces",
-            "controlla", "check", "verifica", "verify", "integrità", "integrity"
-        ]
-        
-        if any(pattern in question_lower for pattern in cleaning_patterns):
-            return "pulizia"
-        
-        # Parole chiave integrazione
-        integration_patterns = [
-            "integra", "integrare", "integrazione", "integrate", "unisci", "unire",
-            "merge", "join", "collega", "collegare", "combina", "combinare"
-        ]
-        
-        if any(pattern in question_lower for pattern in integration_patterns):
-            return "integrazione"
-        """
         # Solo per casi molto ambigui usiamo Gemini (riduce del 90% le chiamate)
         #if len(question.split()) > 15:  # Solo per domande molto lunghe
         return self._classify_with_gemini(question)
@@ -715,13 +664,13 @@ class QASystemWithGemini:
     
     def _classify_with_gemini(self, question: str) -> str:
         """Usa Gemini solo per classificazioni complesse (fallback)."""
-        prompt = f"Classifica '{question}' in: conversazionale, analitica, generale, pulizia, integrazione. Rispondi solo con una parola."
+        prompt = f"Classifica '{question}' in: conversazionale, analitica, generale, pulizia, integrazione, estrazione_conoscenza. Rispondi solo con una parola."
         
         try:
             response = self.model.generate_content(prompt)
             classification = response.text.strip().lower()
             
-            categories = ["conversazionale", "analitica", "generale", "pulizia", "integrazione"]
+            categories = ["conversazionale", "analitica", "generale", "pulizia", "integrazione", "estrazione_conoscenza"]
             for cat in categories:
                 if cat in classification:
                     return cat
@@ -731,7 +680,6 @@ class QASystemWithGemini:
         
         # Fallback sicuro
         return "generale"
-
 
     def get_current_model_info(self) -> dict:
         """Restituisce informazioni sul modello correntemente in uso"""
@@ -771,6 +719,11 @@ class QASystemWithGemini:
             print(f"Errore nel recuperare i modelli disponibili: {e}")
             return []
 
+
+    #---------------------------------------#
+    #      Analytical Questions             #
+    #                                       #
+    #---------------------------------------#
     def handle_analytical_question(self, question: str, class_name: str) -> str:
         """Gestisce domande analitiche in modo deterministico (senza code-gen/exec).
 
@@ -837,9 +790,6 @@ class QASystemWithGemini:
             print(f"Errore handle_analytical_question: {e}")
             return f"Errore durante l'elaborazione della domanda analitica: {str(e)}"
 
-    # ---------------------------
-    # Helper per analitiche
-    # ---------------------------
     def _get_collection_properties(self, collection) -> dict:
         """Rileva proprietà disponibili e prova a classificarle per tipo."""
         try:
@@ -1136,8 +1086,10 @@ class QASystemWithGemini:
         except Exception as e:
             print(f"Errore nel formattare la risposta Weaviate: {e}")
             return f"❌ **Errore nella formattazione**: {str(e)}"
-
-
+    #---------------------------------------#
+    #      Conversational Questions         #
+    #                                       #
+    #---------------------------------------#
     def handle_conversational_question(self, question: str, class_name: str = None) -> str:
         """Gestisce domande conversazionali come saluti, ringraziamenti e domande sul sistema."""
         try:
@@ -1211,6 +1163,12 @@ class QASystemWithGemini:
             # Fallback a una risposta generica
             return "Ciao! 😊 Sono NeuralTabb, il tuo assistente per l'analisi dei dati. Come posso aiutarti oggi?"
 
+    
+    #---------------------------------------#
+    #      General semantic Questions       #
+    #                                       #
+    #---------------------------------------#
+
     def handle_general_question(self, question: str, class_name: str) -> str:
         """RAG ottimizzato con proprietà dinamiche basate sullo schema effettivo."""
         try:
@@ -1234,7 +1192,7 @@ class QASystemWithGemini:
             # Cerca documenti pertinenti
             result = collection.query.near_text(
                 query=question,
-                limit= elements_involved ,  # Ridotto per ottimizzare performance
+                limit= elements_involved , 
                 return_properties=properties_involed
             )
             
@@ -1310,6 +1268,13 @@ Risposta breve e diretta:"""
         return selected_props[:3] if selected_props else available_props[:3]
 
 
+
+    #---------------------------------------#
+    #      Cleaning Questions               #
+    #                                       #
+    #---------------------------------------#
+
+
     def handle_cleaning_question(self, question: str, class_name: str = None) -> str:
         """Gestisce domande di pulizia dati con operazioni reali sui dati."""
         if not class_name:
@@ -1317,43 +1282,128 @@ Risposta breve e diretta:"""
         
         try:
             collection = self.client.collections.get(class_name)
-            question_lower = question.lower()
             
-            # 1. RIMOZIONE DUPLICATI
-            if any(word in question_lower for word in ["duplicat", "duplicate", "doppi", "ripetut"]):
+            # Usa Gemini per identificare intelligentemente il tipo di pulizia richiesta
+            cleaning_type = self._identify_cleaning_type_with_gemini(question, class_name)
+            
+            # Esegui l'operazione di pulizia appropriata basata sulla classificazione di Gemini
+            if cleaning_type == "duplicates":
                 return self._handle_duplicate_removal(collection, class_name, question)
-            
-            # 2. PULIZIA VALORI VUOTI/NULL
-            elif any(word in question_lower for word in ["vuot", "null", "empty", "mancant", "missing", "nan"]):
+            elif cleaning_type == "empty_values":
                 return self._handle_empty_values(collection, class_name, question)
-            
-            # 3. NORMALIZZAZIONE TESTO
-            elif any(word in question_lower for word in ["normaliz", "standard", "maiuscol", "minuscol", "uppercase", "lowercase", "format"]):
+            elif cleaning_type == "text_normalization":
                 return self._handle_text_normalization(collection, class_name, question)
-            
-            # 4. RIMOZIONE SPAZI
-            elif any(word in question_lower for word in ["spazi", "spaces", "trim", "whitespace", "pulisci spazi"]):
+            elif cleaning_type == "whitespace":
                 return self._handle_whitespace_cleaning(collection, class_name, question)
-            
-            # 5. CORREZIONE ENCODING
-            elif any(word in question_lower for word in ["encoding", "caratteri", "accenti", "utf", "codifica"]):
+            elif cleaning_type == "encoding":
                 return self._handle_encoding_issues(collection, class_name, question)
-            
-            # 6. VALIDAZIONE DATI
-            elif any(word in question_lower for word in ["valid", "controlla", "verifica", "check", "integrità"]):
+            elif cleaning_type == "validation":
                 return self._handle_data_validation(collection, class_name, question)
-            
-            # 7. RIMOZIONE OUTLIERS
-            elif any(word in question_lower for word in ["outlier", "anomal", "valore strani", "strange value"]):
+            elif cleaning_type == "outliers":
                 return self._handle_outlier_removal(collection, class_name, question)
-            
-            # 8. PULIZIA GENERALE
-            elif any(word in question_lower for word in ["pulisci", "clean", "sistema", "ripara", "fix", "correggi"]):
+            elif cleaning_type == "general":
                 return self._handle_general_cleaning(collection, class_name, question)
-            
             else:
-                # Usa Gemini per operazioni più specifiche
+                # Per operazioni personalizzate o non standard
                 return self._handle_custom_cleaning_with_gemini(question, collection, class_name)
+                
+        except Exception as e:
+            return f"🧹 **Errore durante la pulizia**\n\nSi è verificato un errore: {str(e)}"
+
+    def _identify_cleaning_type_with_gemini(self, question: str, class_name: str) -> str:
+        """Usa Gemini per identificare intelligentemente il tipo di pulizia richiesta."""
+        try:
+            # Ottieni informazioni sulla collezione per dare contesto a Gemini
+            collection = self.client.collections.get(class_name)
+            
+            # Prendi un campione per capire la struttura dei dati
+            sample_response = collection.query.fetch_objects(limit=3)
+            sample_data = ""
+            
+            if sample_response.objects:
+                sample_properties = []
+                for obj in sample_response.objects[:2]:  # Solo 2 esempi per non sovraccaricare
+                    obj_props = []
+                    for key, value in obj.properties.items():
+                        # Tronca valori lunghi
+                        value_str = str(value)[:50] + "..." if len(str(value)) > 50 else str(value)
+                        obj_props.append(f"{key}: {value_str}")
+                    sample_properties.append(" | ".join(obj_props))
+                
+                sample_data = "\n".join([f"Esempio {i+1}: {props}" for i, props in enumerate(sample_properties)])
+            
+            prompt = f"""
+            Analizza questa richiesta di pulizia dati e identifica il tipo di operazione più appropriato.
+            
+            RICHIESTA: "{question}"
+            
+            COLLEZIONE: {class_name}
+            DATI DI ESEMPIO:
+            {sample_data}
+            
+            TIPI DI PULIZIA DISPONIBILI:
+            1. "duplicates" - Rimuovere record duplicati o molto simili
+            2. "empty_values" - Gestire valori vuoti, null, NaN o mancanti
+            3. "text_normalization" - Normalizzare testo (maiuscole/minuscole, formattazione)
+            4. "whitespace" - Rimuovere spazi extra, trim, pulizia whitespace
+            5. "encoding" - Correggere problemi di encoding, caratteri speciali, accenti
+            6. "validation" - Validare formato dati, controllare integrità
+            7. "outliers" - Rimuovere valori anomali o outliers
+            8. "general" - Pulizia generale o combinazione di operazioni
+            9. "custom" - Operazione personalizzata non coperta dai tipi standard
+            
+            ISTRUZIONI:
+            - Analizza la richiesta nel contesto dei dati disponibili
+            - Considera sia il linguaggio naturale che la struttura dei dati
+            - Se la richiesta è ambigua, scegli il tipo più generale appropriato
+            - Rispondi con UNA SOLA parola chiave tra quelle elencate sopra
+            
+            RISPOSTA:"""
+            
+            response = self.model.generate_content(prompt)
+            classification = response.text.strip().lower()
+            
+            # Mappa le possibili risposte ai tipi validi
+            valid_types = [
+                "duplicates", "empty_values", "text_normalization", 
+                "whitespace", "encoding", "validation", "outliers", 
+                "general", "custom"
+            ]
+            
+            # Cerca la classificazione nella risposta
+            for valid_type in valid_types:
+                if valid_type in classification:
+                    print(f"🤖 Gemini ha classificato la pulizia come: {valid_type}")
+                    return valid_type
+            
+            # Fallback: prova a fare un match parziale più intelligente
+            if any(word in classification for word in ["duplicat", "duplicate", "doppi"]):
+                return "duplicates"
+            elif any(word in classification for word in ["vuot", "null", "empty", "mancant"]):
+                return "empty_values"
+            elif any(word in classification for word in ["normal", "format", "maiuscol", "minuscol"]):
+                return "text_normalization"
+            elif any(word in classification for word in ["spazi", "space", "trim"]):
+                return "whitespace"
+            elif any(word in classification for word in ["encoding", "caratteri", "accenti"]):
+                return "encoding"
+            elif any(word in classification for word in ["valid", "controlla", "verifica"]):
+                return "validation"
+            elif any(word in classification for word in ["outlier", "anomal"]):
+                return "outliers"
+            else:
+                return "general"  # Fallback sicuro
+                
+        except Exception as e:
+            print(f"Errore nella classificazione con Gemini: {e}")
+            # Fallback a classificazione locale semplice
+            question_lower = question.lower()
+            if any(word in question_lower for word in ["duplicat", "duplicate", "doppi"]):
+                return "duplicates"
+            elif any(word in question_lower for word in ["vuot", "null", "empty"]):
+                return "empty_values"
+            else:
+                return "general"
                 
         except Exception as e:
             return f"🧹 **Errore durante la pulizia**\n\nSi è verificato un errore: {str(e)}"
@@ -1992,53 +2042,521 @@ Questa funzionalità avanzata sarà presto disponibile! 🚀
         except Exception as e:
             return f"🧹 **Errore Pulizia Generale**\n\nErrore durante la pulizia generale: {str(e)}"
 
-    def _handle_custom_cleaning_with_gemini(self, question: str, collection, class_name: str) -> str:
-        """Usa Gemini per operazioni di pulizia personalizzate non coperte dai metodi standard."""
+    #---------------------------------------#
+    #      Knowledge Extraction Questions   #
+    #                                       #
+    #---------------------------------------#
+  
+    def handle_knowledge_extraction_question(self, question: str, class_name: str) -> str:
+        """Gestisce domande di estrazione di conoscenza con operazioni avanzate sui dati."""
+        try:
+            collection = self.client.collections.get(class_name)
+            
+            # Usa Gemini per identificare il tipo specifico di estrazione di conoscenza richiesta
+            extraction_type = self._identify_knowledge_extraction_type_with_gemini(question, class_name)
+            
+            # Esegui l'operazione di estrazione appropriata
+            if extraction_type == "pattern_discovery":
+                return self._extract_patterns(collection, class_name, question)
+            elif extraction_type == "topic_modeling":
+                return self._extract_topics(collection, class_name, question)
+            elif extraction_type == "entity_extraction":
+                return self._extract_entities(collection, class_name, question)
+            elif extraction_type == "sentiment_analysis":
+                return self._analyze_sentiment(collection, class_name, question)
+            else:
+                # Estrazione generica con approccio ibrido
+                return self._general_knowledge_extraction(collection, class_name, question)
+                
+        except Exception as e:
+            return f"🧠 **Errore nell'estrazione di conoscenza**\n\nSi è verificato un errore: {str(e)}"
+
+    def _identify_knowledge_extraction_type_with_gemini(self, question: str, class_name: str) -> str:
+        """Usa Gemini per identificare il tipo specifico di estrazione di conoscenza richiesta."""
         try:
             # Ottieni informazioni sulla collezione
+            collection = self.client.collections.get(class_name)
+            props_info = self._get_collection_properties(collection)
+            
+            # Prendi un campione per capire il tipo di dati
             sample_response = collection.query.fetch_objects(limit=3)
-            if not sample_response.objects:
-                return "🧹 **Pulizia Personalizzata**\n\nNessun documento trovato nella collezione per l'analisi."
+            sample_data = ""
             
-            # Prepara contesto per Gemini
-            properties = list(sample_response.objects[0].properties.keys())
-            sample_data = []
-            
-            for doc in sample_response.objects:
-                doc_sample = {}
-                for prop_name, prop_value in doc.properties.items():
-                    if isinstance(prop_value, str) and len(prop_value) > 100:
-                        doc_sample[prop_name] = prop_value[:100] + "..."
-                    else:
-                        doc_sample[prop_name] = str(prop_value) if prop_value is not None else "NULL"
-                sample_data.append(doc_sample)
+            if sample_response.objects:
+                sample_properties = []
+                for obj in sample_response.objects[:2]:
+                    obj_props = []
+                    for key, value in obj.properties.items():
+                        value_str = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
+                        obj_props.append(f"{key}: {value_str}")
+                    sample_properties.append(" | ".join(obj_props))
+                
+                sample_data = "\n".join([f"Esempio {i+1}: {props}" for i, props in enumerate(sample_properties)])
             
             prompt = f"""
-            Sei un esperto in pulizia e normalizzazione dati per la collezione '{class_name}'.
+            Analizza questa richiesta di estrazione di conoscenza e identifica il tipo specifico di operazione.
             
-            RICHIESTA UTENTE: "{question}"
+            RICHIESTA: "{question}"
             
-            PROPRIETÀ DISPONIBILI: {properties}
+            COLLEZIONE: {class_name}
+            PROPRIETÀ DISPONIBILI: {props_info.get('all', [])}
+            PROPRIETÀ TESTUALI: {props_info.get('text', [])}
+            PROPRIETÀ NUMERICHE: {props_info.get('number', [])}
             
-            CAMPIONE DATI:
+            DATI DI ESEMPIO:
             {sample_data}
             
-            Analizza la richiesta di pulizia e fornisci:
-            1. Tipo di operazione richiesta
-            2. Campi da processare  
-            3. Metodo di pulizia suggerito
-            4. Potenziali problemi da considerare
-            5. Passi specifici per l'implementazione
+            TIPI DI ESTRAZIONE DISPONIBILI:
+            1. "pattern_discovery" - Scoprire pattern nascosti, regularità, comportamenti ricorrenti
+            2. "topic_modeling" - Identificare temi, argomenti, categorie concettuali
+            3. "entity_extraction" - Estrarre entità (persone, luoghi, organizzazioni, brand)
+            4. "sentiment_analysis" - Analizzare sentiment, emozioni, opinioni
+            5. "correlation_analysis" - Trovare correlazioni tra variabili, dipendenze
+            6. "trend_analysis" - Analizzare tendenze temporali, evoluzione
+            7. "clustering" - Raggruppare elementi simili, segmentazione
+            8. "summarization" - Riassumere, sintetizzare, estrarre punti chiave
+            9. "keyword_extraction" - Estrarre parole chiave, termini importanti
+            10. "relationship_mapping" - Mappare relazioni, connessioni, network
+            11. "general" - Estrazione generica o combinazione di tecniche
             
-            IMPORTANTE: Sii specifico sui campi e metodi da usare.
+            ISTRUZIONI:
+            - Considera sia la richiesta che la natura dei dati disponibili
+            - Per dati testuali: preferisci topic_modeling, sentiment, entity_extraction
+            - Per dati numerici: preferisci correlation_analysis, trend_analysis, clustering
+            - Per richieste di sintesi: usa summarization
+            - Per richieste di connessioni: usa relationship_mapping
+            
+            Rispondi con UNA SOLA parola chiave tra quelle elencate sopra.
             """
             
             response = self.model.generate_content(prompt)
+            classification = response.text.strip().lower()
             
-            return f"🧹 **Analisi Pulizia Personalizzata**\n\n{response.text.strip()}\n\n💡 **Nota:** Questa è un'analisi della richiesta. L'implementazione automatica di operazioni personalizzate sarà disponibile nelle prossime versioni."
+            # Mappa le risposte ai tipi validi
+            valid_types = [
+                "pattern_discovery", "topic_modeling", "entity_extraction", 
+                "sentiment_analysis", "correlation_analysis", "trend_analysis",
+                "clustering", "summarization", "keyword_extraction", 
+                "relationship_mapping", "general"
+            ]
+            
+            # Cerca la classificazione nella risposta
+            for valid_type in valid_types:
+                if valid_type in classification:
+                    print(f"🤖 Gemini ha classificato l'estrazione come: {valid_type}")
+                    return valid_type
+            
+            # Fallback con match parziale
+            if any(word in classification for word in ["pattern", "regularità", "comportament"]):
+                return "pattern_discovery"
+            elif any(word in classification for word in ["topic", "temi", "argomenti"]):
+                return "topic_modeling"
+            elif any(word in classification for word in ["entità", "entity", "persone", "luoghi"]):
+                return "entity_extraction"
+            elif any(word in classification for word in ["sentiment", "emotion", "opinioni"]):
+                return "sentiment_analysis"
+            elif any(word in classification for word in ["correlazione", "dipendenze"]):
+                return "correlation_analysis"
+            elif any(word in classification for word in ["trend", "tendenze", "evoluzione"]):
+                return "trend_analysis"
+            elif any(word in classification for word in ["cluster", "raggrup", "segment"]):
+                return "clustering"
+            elif any(word in classification for word in ["riassun", "sintesi", "summary"]):
+                return "summarization"
+            elif any(word in classification for word in ["keyword", "parole chiave", "termini"]):
+                return "keyword_extraction"
+            elif any(word in classification for word in ["relazioni", "connessioni", "network"]):
+                return "relationship_mapping"
+            else:
+                return "general"
+                
+        except Exception as e:
+            print(f"Errore nella classificazione dell'estrazione: {e}")
+            return "general"
+
+    def _extract_patterns(self, collection, class_name: str, question: str) -> str:
+        """Estrae pattern ricorrenti dai dati."""
+        try:
+            # Ottieni un campione significativo di dati
+            response = collection.query.fetch_objects(limit=100)
+            
+            if not response.objects:
+                return "🧠 **Pattern Discovery**\n\nNon ci sono dati sufficienti per l'analisi dei pattern."
+            
+            # Analizza le proprietà per identificare pattern
+            props_info = self._get_collection_properties(collection)
+            text_props = props_info.get('text', [])
+            number_props = props_info.get('number', [])
+            
+            patterns_found = []
+            
+            # Pattern sui dati testuali
+            if text_props:
+                text_patterns = self._analyze_text_patterns(response.objects, text_props[:2])
+                patterns_found.extend(text_patterns)
+            
+            # Pattern sui dati numerici
+            if number_props:
+                numeric_patterns = self._analyze_numeric_patterns(response.objects, number_props[:2])
+                patterns_found.extend(numeric_patterns)
+            
+            # Usa Gemini per interpretare i pattern trovati
+            interpretation = self._interpret_patterns_with_gemini(patterns_found, question, class_name)
+            
+            return f"🧠 **Pattern Discovery**\n\n{interpretation}"
             
         except Exception as e:
-            return f"🧹 **Errore Pulizia Personalizzata**\n\nErrore nell'analisi: {str(e)}"
+            return f"🧠 **Errore Pattern Discovery**\n\nErrore: {str(e)}"
+
+    def _extract_topics(self, collection, class_name: str, question: str) -> str:
+        """Estrae topic e temi principali dai contenuti testuali."""
+        try:
+            props_info = self._get_collection_properties(collection)
+            text_props = props_info.get('text', [])
+            
+            if not text_props:
+                return "🧠 **Topic Modeling**\n\nNon ci sono proprietà testuali sufficienti per l'analisi dei topic."
+            
+            # Prendi un campione di testi
+            response = collection.query.fetch_objects(
+                limit=50,
+                return_properties=text_props[:2]  # Prendi le prime 2 proprietà testuali
+            )
+            
+            if not response.objects:
+                return "🧠 **Topic Modeling**\n\nNon ci sono dati sufficienti per l'analisi dei topic."
+            
+            # Estrai i contenuti testuali
+            texts = []
+            for obj in response.objects:
+                obj_text = []
+                for prop in text_props[:2]:
+                    if prop in obj.properties and obj.properties[prop]:
+                        text_content = str(obj.properties[prop])
+                        if len(text_content) > 50:  # Solo testi significativi
+                            obj_text.append(text_content)
+                
+                if obj_text:
+                    texts.append(" ".join(obj_text))
+            
+            if len(texts) < 5:
+                return "🧠 **Topic Modeling**\n\nNon ci sono abbastanza testi per un'analisi significativa dei topic."
+            
+            # Usa Gemini per analizzare i topic
+            topics = self._analyze_topics_with_gemini(texts, question, class_name)
+            
+            return f"🧠 **Topic Modeling**\n\n{topics}"
+            
+        except Exception as e:
+            return f"🧠 **Errore Topic Modeling**\n\nErrore: {str(e)}"
+
+    def _extract_entities(self, collection, class_name: str, question: str) -> str:
+        """Estrae entità nominate dai testi."""
+        try:
+            props_info = self._get_collection_properties(collection)
+            text_props = props_info.get('text', [])
+            
+            if not text_props:
+                return "🧠 **Entity Extraction**\n\nNon ci sono proprietà testuali per l'estrazione di entità."
+            
+            # Prendi un campione di testi
+            response = collection.query.fetch_objects(
+                limit=30,
+                return_properties=text_props[:2]
+            )
+            
+            if not response.objects:
+                return "🧠 **Entity Extraction**\n\nNon ci sono dati sufficienti per l'estrazione di entità."
+            
+            # Combina i testi per l'analisi
+            combined_text = []
+            for obj in response.objects:
+                for prop in text_props[:2]:
+                    if prop in obj.properties and obj.properties[prop]:
+                        text_content = str(obj.properties[prop])
+                        if len(text_content) > 20:
+                            combined_text.append(text_content)
+            
+            if not combined_text:
+                return "🧠 **Entity Extraction**\n\nNon ci sono testi sufficienti per l'estrazione di entità."
+            
+            # Usa Gemini per estrarre entità
+            entities = self._extract_entities_with_gemini(combined_text[:10], question, class_name)
+            
+            return f"🧠 **Entity Extraction**\n\n{entities}"
+            
+        except Exception as e:
+            return f"🧠 **Errore Entity Extraction**\n\nErrore: {str(e)}"
+
+    def _analyze_sentiment(self, collection, class_name: str, question: str) -> str:
+        """Analizza il sentiment dei contenuti testuali."""
+        try:
+            props_info = self._get_collection_properties(collection)
+            text_props = props_info.get('text', [])
+            
+            if not text_props:
+                return "🧠 **Sentiment Analysis**\n\nNon ci sono proprietà testuali per l'analisi del sentiment."
+            
+            # Prendi un campione di testi
+            response = collection.query.fetch_objects(
+                limit=40,
+                return_properties=text_props[:2]
+            )
+            
+            if not response.objects:
+                return "🧠 **Sentiment Analysis**\n\nNon ci sono dati sufficienti per l'analisi del sentiment."
+            
+            # Prepara i testi per l'analisi
+            texts_for_analysis = []
+            for obj in response.objects:
+                obj_texts = []
+                for prop in text_props[:2]:
+                    if prop in obj.properties and obj.properties[prop]:
+                        text_content = str(obj.properties[prop])
+                        if len(text_content) > 30:
+                            obj_texts.append(text_content[:300])  # Limita la lunghezza
+                
+                if obj_texts:
+                    texts_for_analysis.append(" | ".join(obj_texts))
+            
+            if len(texts_for_analysis) < 3:
+                return "🧠 **Sentiment Analysis**\n\nNon ci sono abbastanza testi per un'analisi significativa del sentiment."
+            
+            # Usa Gemini per analizzare il sentiment
+            sentiment_analysis = self._analyze_sentiment_with_gemini(texts_for_analysis[:15], question, class_name)
+            
+            return f"🧠 **Sentiment Analysis**\n\n{sentiment_analysis}"
+            
+        except Exception as e:
+            return f"🧠 **Errore Sentiment Analysis**\n\nErrore: {str(e)}"
+
+    def _general_knowledge_extraction(self, collection, class_name: str, question: str) -> str:
+        """Estrazione di conoscenza generica con approccio ibrido."""
+        try:
+            # Ottieni informazioni complete sulla collezione
+            props_info = self._get_collection_properties(collection)
+            
+            # Prendi un campione rappresentativo
+            response = collection.query.fetch_objects(limit=30)
+            
+            if not response.objects:
+                return "🧠 **Knowledge Extraction**\n\nNon ci sono dati sufficienti per l'estrazione di conoscenza."
+            
+            # Prepara i dati per l'analisi
+            sample_data = []
+            for obj in response.objects[:10]:  # Limita per non sovraccaricare
+                obj_summary = []
+                for key, value in obj.properties.items():
+                    if value is not None:
+                        value_str = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
+                        obj_summary.append(f"{key}: {value_str}")
+                
+                if obj_summary:
+                    sample_data.append(" | ".join(obj_summary))
+            
+            # Usa Gemini per un'analisi completa e personalizzata
+            analysis = self._perform_comprehensive_analysis_with_gemini(
+                sample_data, props_info, question, class_name
+            )
+            
+            return f"🧠 **Knowledge Extraction**\n\n{analysis}"
+            
+        except Exception as e:
+            return f"🧠 **Errore Knowledge Extraction**\n\nErrore: {str(e)}"
+
+    # Metodi di supporto per l'analisi con Gemini
+
+    def _analyze_topics_with_gemini(self, texts: list, question: str, class_name: str) -> str:
+        """Usa Gemini per analizzare i topic nei testi."""
+        try:
+            # Prepara un campione dei testi per Gemini
+            sample_texts = texts[:10]  # Limita per non sovraccaricare
+            combined_sample = "\n---\n".join([f"Testo {i+1}: {text[:200]}..." 
+                                            for i, text in enumerate(sample_texts)])
+            
+            prompt = f"""
+            Analizza questi testi dalla collezione "{class_name}" e identifica i topic/temi principali.
+            
+            RICHIESTA ORIGINALE: "{question}"
+            
+            TESTI DA ANALIZZARE:
+            {combined_sample}
+            
+            COMPITO:
+            1. Identifica i 5-8 topic/temi principali presenti nei testi
+            2. Per ogni topic, fornisci:
+               - Nome del topic
+               - Breve descrizione
+               - Frequenza stimata (alta/media/bassa)
+               - Parole chiave associate
+            3. Identifica eventuali topic emergenti o minoritari interessanti
+            4. Suggerisci insights o pattern tematici significativi
+            
+            FORMATO RISPOSTA:
+            **Topic Principali:**
+            • **[Nome Topic]** (Frequenza: X) - Descrizione
+              Keywords: parola1, parola2, parola3
+            
+            **Insights Tematici:**
+            - Insight 1
+            - Insight 2
+            
+            Mantieni la risposta chiara, strutturata e focalizzata sui risultati più significativi.
+            """
+            
+            response = self.model.generate_content(prompt)
+            return response.text.strip()
+            
+        except Exception as e:
+            return f"Errore nell'analisi dei topic: {str(e)}"
+
+    def _extract_entities_with_gemini(self, texts: list, question: str, class_name: str) -> str:
+        """Usa Gemini per estrarre entità nominate."""
+        try:
+            sample_texts = texts[:8]
+            combined_sample = "\n---\n".join([f"Testo {i+1}: {text[:250]}..." 
+                                            for i, text in enumerate(sample_texts)])
+            
+            prompt = f"""
+            Estrai entità nominate da questi testi della collezione "{class_name}".
+            
+            RICHIESTA ORIGINALE: "{question}"
+            
+            TESTI DA ANALIZZARE:
+            {combined_sample}
+            
+            COMPITO:
+            Identifica e categorizza le seguenti entità:
+            1. **PERSONE** - Nomi di persone, autori, personaggi
+            2. **LUOGHI** - Città, paesi, regioni, location specifiche
+            3. **ORGANIZZAZIONI** - Aziende, istituzioni, gruppi
+            4. **BRAND/PRODOTTI** - Marchi, prodotti, servizi
+            5. **DATE/EVENTI** - Date, eventi storici, occasioni
+            6. **ALTRI** - Altre entità rilevanti per il dominio
+            
+            FORMATO RISPOSTA:
+            **👥 PERSONE:**
+            • Nome1, Nome2, Nome3...
+            
+            **📍 LUOGHI:**
+            • Luogo1, Luogo2, Luogo3...
+            
+            **🏢 ORGANIZZAZIONI:**
+            • Org1, Org2, Org3...
+            
+            **Insights:**
+            - Osservazione principale sulle entità trovate
+            - Pattern geografici/temporali notevoli
+            
+            Se una categoria è vuota, non includerla. Concentrati sulle entità più frequenti e significative.
+            """
+            
+            response = self.model.generate_content(prompt)
+            return response.text.strip()
+            
+        except Exception as e:
+            return f"Errore nell'estrazione di entità: {str(e)}"
+
+    def _analyze_sentiment_with_gemini(self, texts: list, question: str, class_name: str) -> str:
+        """Usa Gemini per analizzare il sentiment."""
+        try:
+            sample_texts = texts[:12]
+            combined_sample = "\n---\n".join([f"Testo {i+1}: {text[:200]}..." 
+                                            for i, text in enumerate(sample_texts)])
+            
+            prompt = f"""
+            Analizza il sentiment e il tono emotivo di questi testi dalla collezione "{class_name}".
+            
+            RICHIESTA ORIGINALE: "{question}"
+            
+            TESTI DA ANALIZZARE:
+            {combined_sample}
+            
+            COMPITO:
+            1. **Sentiment Generale**: Determina il sentiment predominante (Positivo/Neutro/Negativo) con percentuali
+            2. **Emozioni Specifiche**: Identifica emozioni presenti (gioia, tristezza, rabbia, paura, sorpresa, etc.)
+            3. **Tono**: Descrivi il tono complessivo (formale/informale, tecnico/colloquiale, etc.)
+            4. **Variazioni**: Evidenzia eventuali variazioni di sentiment tra i testi
+            5. **Insights**: Osservazioni significative sul sentiment
+            
+            FORMATO RISPOSTA:
+            **📊 Sentiment Generale:**
+            • Positivo: X% | Neutro: Y% | Negativo: Z%
+            
+            **😊 Emozioni Rilevate:**
+            • Emozione principale: descrizione
+            • Emozione secondaria: descrizione
+            
+            **🎭 Tono e Stile:**
+            • Caratteristiche del tono identificate
+            
+            **💡 Insights:**
+            • Osservazione chiave 1
+            • Osservazione chiave 2
+            
+            Sii specifico e fornisci esempi quando possibile.
+            """
+            
+            response = self.model.generate_content(prompt)
+            return response.text.strip()
+            
+        except Exception as e:
+            return f"Errore nell'analisi del sentiment: {str(e)}"
+
+    def _perform_comprehensive_analysis_with_gemini(self, sample_data: list, props_info: dict, question: str, class_name: str) -> str:
+        """Esegue un'analisi completa e personalizzata con Gemini."""
+        try:
+            # Prepara il campione dati
+            data_sample = "\n".join([f"Record {i+1}: {data}" for i, data in enumerate(sample_data[:8])])
+            
+            prompt = f"""
+            Esegui un'analisi completa di estrazione di conoscenza per questa richiesta specifica.
+            
+            RICHIESTA: "{question}"
+            COLLEZIONE: "{class_name}"
+            
+            STRUTTURA DATI:
+            - Proprietà totali: {props_info.get('all', [])}
+            - Proprietà testuali: {props_info.get('text', [])}
+            - Proprietà numeriche: {props_info.get('number', [])}
+            
+            CAMPIONE DATI:
+            {data_sample}
+            
+            COMPITO:
+            Basandoti sulla richiesta specifica e sui dati disponibili, esegui l'analisi più appropriata tra:
+            
+            1. **Pattern Analysis** - Se cerchi regolarità, comportamenti ricorrenti
+            2. **Content Analysis** - Se vuoi analizzare contenuti, temi, significati
+            3. **Statistical Insights** - Se cerchi correlazioni, trend numerici
+            4. **Structural Analysis** - Se vuoi capire relazioni, connessioni
+            5. **Comparative Analysis** - Se vuoi confronti, classificazioni
+            
+            FORMATO RISPOSTA:
+            **🎯 Tipo di Analisi Eseguita:** [Nome Analisi]
+            
+            **📋 Risultati Principali:**
+            • Risultato 1 con dettagli
+            • Risultato 2 con dettagli
+            • Risultato 3 con dettagli
+            
+            **💡 Insights Chiave:**
+            • Insight significativo 1
+            • Insight significativo 2
+            
+            **🔍 Raccomandazioni:**
+            • Cosa approfondire ulteriormente
+            • Domande aggiuntive da esplorare
+            
+            Concentrati sui risultati più rilevanti per la richiesta specifica e fornisci insights azionabili.
+            """
+            
+            response = self.model.generate_content(prompt)
+            return response.text.strip()
+            
+        except Exception as e:
+            return f"Errore nell'analisi completa: {str(e)}"
+
 
     def smart_answer(self, question: str, collection_name: str = None) -> Dict[str, Any]:
         """
@@ -2053,7 +2571,7 @@ Questa funzionalità avanzata sarà presto disponibile! 🚀
             self._track_gemini_call(len(question))
             
             # Per domande che richiedono dati, verifica che ci sia una collezione
-            if question_type in ["analitica", "pulizia", "generale", "integrazione"] and not collection_name:
+            if question_type in ["analitica", "pulizia", "generale", "integrazione", "estrazione_conoscenza"] and not collection_name:
                 return {
                     'answer': "❌ **Collezione richiesta**\n\nPer questo tipo di domanda devi selezionare una collezione che contenga i dati da analizzare.",
                     'type': "error",
@@ -2088,9 +2606,12 @@ Questa funzionalità avanzata sarà presto disponibile! 🚀
             elif question_type == "pulizia":
                 answer = self.handle_cleaning_question(question, collection_name)
                 response_type = "cleaning"
-            elif question_type == "estrazione":
+            elif question_type == "integrazione":
                 # Per ora usiamo la gestione generale per le integrazioni
                 answer = self.handle_general_question(question, collection_name)
+                response_type = "integration"
+            elif question_type == "estrazione_conoscenza":
+                answer = self.handle_knowledge_extraction_question(question, collection_name)
                 response_type = "knowledge_extraction"
             else:  # general/semantic
                 answer = self.handle_general_question(question, collection_name)
@@ -2121,3 +2642,246 @@ Questa funzionalità avanzata sarà presto disponibile! 🚀
                 'error': str(e)
             }
 
+    def prepare_response_for_download(self, response_data: dict, format_type: str = 'txt') -> dict:
+        """Prepara la risposta per il download in vari formati."""
+        try:
+            import os
+            import json
+            from datetime import datetime
+            
+            # Crea la cartella exports se non esiste
+            export_dir = "exports"
+            os.makedirs(export_dir, exist_ok=True)
+            
+            # Genera nome file unico
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            question_short = response_data.get('question', 'query')[:30].replace(' ', '_').replace('?', '').replace(':', '')
+            collection_name = response_data.get('collection', 'unknown')
+            response_type = response_data.get('type', 'general')
+            
+            base_filename = f"{response_type}_{collection_name}_{question_short}_{timestamp}"
+            
+            if format_type == 'txt':
+                return self._export_as_text(response_data, export_dir, base_filename)
+            elif format_type == 'json':
+                return self._export_as_json(response_data, export_dir, base_filename)
+            elif format_type == 'csv':
+                return self._export_as_csv(response_data, export_dir, base_filename)
+            elif format_type == 'md':
+                return self._export_as_markdown(response_data, export_dir, base_filename)
+            else:
+                return {"error": f"Formato {format_type} non supportato"}
+                
+        except Exception as e:
+            return {"error": f"Errore nella preparazione del download: {str(e)}"}
+
+    def _export_as_text(self, response_data: dict, export_dir: str, base_filename: str) -> dict:
+        """Esporta la risposta come file di testo formattato."""
+        try:
+            from datetime import datetime
+            
+            filepath = os.path.join(export_dir, f"{base_filename}.txt")
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write("=" * 80 + "\n")
+                f.write("NEURALABB - REPORT ANALISI\n")
+                f.write("=" * 80 + "\n\n")
+                
+                f.write(f"📊 TIPO ANALISI: {response_data.get('type', 'N/A').upper()}\n")
+                f.write(f"📅 DATA: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"🗂️  COLLEZIONE: {response_data.get('collection', 'N/A')}\n")
+                f.write(f"⏱️  TEMPO ELABORAZIONE: {response_data.get('response_time', 'N/A')} secondi\n\n")
+                
+                f.write("❓ DOMANDA:\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"{response_data.get('question', 'N/A')}\n\n")
+                
+                f.write("💡 RISPOSTA:\n")
+                f.write("-" * 40 + "\n")
+                answer = response_data.get('answer', 'N/A')
+                # Rimuovi markdown per il file di testo
+                answer = self._clean_markdown_for_text(answer)
+                f.write(f"{answer}\n\n")
+                
+                # Aggiungi informazioni tecniche se disponibili
+                if 'model_info' in response_data:
+                    f.write("🤖 INFORMAZIONI MODELLO:\n")
+                    f.write("-" * 40 + "\n")
+                    model_info = response_data['model_info']
+                    f.write(f"Modello: {model_info.get('model_name', 'N/A')}\n")
+                    f.write(f"Versione 2.0: {model_info.get('is_gemini_2_0', False)}\n\n")
+                
+                if 'usage_stats' in response_data:
+                    f.write("📈 STATISTICHE UTILIZZO:\n")
+                    f.write("-" * 40 + "\n")
+                    stats = response_data['usage_stats']
+                    f.write(f"Chiamate totali: {stats.get('total_calls', 'N/A')}\n")
+                    f.write(f"Token risparmiati: {stats.get('estimated_tokens_saved', 'N/A')}\n\n")
+                
+                f.write("=" * 80 + "\n")
+                f.write("Fine del report\n")
+                f.write("=" * 80 + "\n")
+            
+            return {
+                "success": True,
+                "filepath": filepath,
+                "filename": f"{base_filename}.txt",
+                "format": "text"
+            }
+            
+        except Exception as e:
+            return {"error": f"Errore nell'export testo: {str(e)}"}
+
+    def _export_as_json(self, response_data: dict, export_dir: str, base_filename: str) -> dict:
+        """Esporta la risposta come file JSON."""
+        try:
+            import json
+            from datetime import datetime
+            
+            filepath = os.path.join(export_dir, f"{base_filename}.json")
+            
+            # Prepara i dati JSON con metadata aggiuntivi
+            json_data = {
+                "metadata": {
+                    "export_timestamp": datetime.now().isoformat(),
+                    "tool": "NeuralTabb",
+                    "version": "1.0"
+                },
+                "analysis": response_data
+            }
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(json_data, f, indent=2, ensure_ascii=False)
+            
+            return {
+                "success": True,
+                "filepath": filepath,
+                "filename": f"{base_filename}.json",
+                "format": "json"
+            }
+            
+        except Exception as e:
+            return {"error": f"Errore nell'export JSON: {str(e)}"}
+
+    def _export_as_markdown(self, response_data: dict, export_dir: str, base_filename: str) -> dict:
+        """Esporta la risposta come file Markdown."""
+        try:
+            from datetime import datetime
+            
+            filepath = os.path.join(export_dir, f"{base_filename}.md")
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write("# 🧠 NeuralTabb - Report Analisi\n\n")
+                
+                f.write("## 📋 Informazioni Generali\n\n")
+                f.write(f"- **Tipo Analisi**: {response_data.get('type', 'N/A')}\n")
+                f.write(f"- **Data**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"- **Collezione**: `{response_data.get('collection', 'N/A')}`\n")
+                f.write(f"- **Tempo Elaborazione**: {response_data.get('response_time', 'N/A')} secondi\n\n")
+                
+                f.write("## ❓ Domanda\n\n")
+                f.write(f"```\n{response_data.get('question', 'N/A')}\n```\n\n")
+                
+                f.write("## 💡 Risposta\n\n")
+                answer = response_data.get('answer', 'N/A')
+                f.write(f"{answer}\n\n")
+                
+                # Sezione tecnica
+                f.write("## 🔧 Dettagli Tecnici\n\n")
+                
+                if 'model_info' in response_data:
+                    f.write("### 🤖 Modello AI\n\n")
+                    model_info = response_data['model_info']
+                    f.write(f"- **Modello**: {model_info.get('model_name', 'N/A')}\n")
+                    f.write(f"- **Gemini 2.0**: {model_info.get('is_gemini_2_0', False)}\n\n")
+                
+                if 'usage_stats' in response_data:
+                    f.write("### 📈 Statistiche\n\n")
+                    stats = response_data['usage_stats']
+                    f.write(f"- **Chiamate Totali**: {stats.get('total_calls', 'N/A')}\n")
+                    f.write(f"- **Token Risparmiati**: {stats.get('estimated_tokens_saved', 'N/A')}\n\n")
+                
+                f.write("---\n")
+                f.write("*Report generato da NeuralTabb*\n")
+            
+            return {
+                "success": True,
+                "filepath": filepath,
+                "filename": f"{base_filename}.md",
+                "format": "markdown"
+            }
+            
+        except Exception as e:
+            return {"error": f"Errore nell'export Markdown: {str(e)}"}
+
+    def _export_as_csv(self, response_data: dict, export_dir: str, base_filename: str) -> dict:
+        """Esporta la risposta come file CSV (per dati strutturati)."""
+        try:
+            import csv
+            from datetime import datetime
+            
+            filepath = os.path.join(export_dir, f"{base_filename}.csv")
+            
+            # Per CSV, esportiamo i metadati principali
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                
+                # Header
+                writer.writerow(['Campo', 'Valore'])
+                
+                # Dati principali
+                writer.writerow(['Data Export', datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
+                writer.writerow(['Tipo Analisi', response_data.get('type', 'N/A')])
+                writer.writerow(['Collezione', response_data.get('collection', 'N/A')])
+                writer.writerow(['Tempo Elaborazione (sec)', response_data.get('response_time', 'N/A')])
+                writer.writerow(['Domanda', response_data.get('question', 'N/A')])
+                
+                # Pulisci la risposta per CSV
+                answer = response_data.get('answer', 'N/A')
+                answer_clean = self._clean_markdown_for_text(answer).replace('\n', ' | ')
+                writer.writerow(['Risposta', answer_clean])
+                
+                # Informazioni modello
+                if 'model_info' in response_data:
+                    model_info = response_data['model_info']
+                    writer.writerow(['Modello AI', model_info.get('model_name', 'N/A')])
+                    writer.writerow(['Gemini 2.0', model_info.get('is_gemini_2_0', False)])
+                
+                # Statistiche
+                if 'usage_stats' in response_data:
+                    stats = response_data['usage_stats']
+                    writer.writerow(['Chiamate Totali', stats.get('total_calls', 'N/A')])
+                    writer.writerow(['Token Risparmiati', stats.get('estimated_tokens_saved', 'N/A')])
+            
+            return {
+                "success": True,
+                "filepath": filepath,
+                "filename": f"{base_filename}.csv",
+                "format": "csv"
+            }
+            
+        except Exception as e:
+            return {"error": f"Errore nell'export CSV: {str(e)}"}
+
+    def _clean_markdown_for_text(self, text: str) -> str:
+        """Rimuove la formattazione Markdown per export di testo pulito."""
+        import re
+        
+        # Rimuovi headers markdown
+        text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)
+        
+        # Rimuovi bold/italic
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+        text = re.sub(r'\*(.*?)\*', r'\1', text)
+        
+        # Rimuovi emoji markdown-style
+        text = re.sub(r':\w+:', '', text)
+        
+        # Rimuovi blocchi di codice
+        text = re.sub(r'```.*?```', '[CODICE]', text, flags=re.DOTALL)
+        text = re.sub(r'`(.*?)`', r'\1', text)
+        
+        # Rimuovi link
+        text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+        
+        return text.strip()

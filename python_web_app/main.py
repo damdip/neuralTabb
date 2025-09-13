@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, flash, redirect, url_for
+from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, send_file
 import weaviate
 import json
 import os
@@ -6,7 +6,6 @@ from werkzeug.utils import secure_filename
 import pandas as pd
 from datetime import datetime
 import traceback
-
 # Import dei moduli personalizzati
 from modules import WeaviateManager, QASystemWithGemini
 
@@ -420,6 +419,66 @@ def internal_error(error):
 @app.errorhandler(404)
 def not_found(error):
     return render_template('error.html', error="Pagina non trovata"), 404
+
+@app.route('/download/response', methods=['POST'])
+def download_response():
+    """Endpoint per scaricare le risposte in vari formati."""
+    if not qa_gemini:
+        return jsonify({'success': False, 'error': 'Sistema QA non disponibile'})
+    
+    try:
+        data = request.get_json()
+        response_data = data.get('response_data')
+        format_type = data.get('format', 'txt')  # txt, json, csv, md
+        
+        if not response_data:
+            return jsonify({'success': False, 'error': 'Dati risposta mancanti'})
+        
+        # Prepara il file per il download
+        export_result = qa_gemini.prepare_response_for_download(response_data, format_type)
+        
+        if 'error' in export_result:
+            return jsonify({'success': False, 'error': export_result['error']})
+        
+        return jsonify({
+            'success': True,
+            'download_url': f"/download/file/{export_result['filename']}",
+            'filename': export_result['filename'],
+            'format': export_result['format']
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Errore nella preparazione del download: {str(e)}'})
+
+@app.route('/download/file/<filename>')
+def download_file(filename):
+    """Serve i file per il download."""
+    try:
+        import os
+        file_path = os.path.join('exports', filename)
+        
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'File non trovato'}), 404
+        
+        # Determina il MIME type basato sull'estensione
+        if filename.endswith('.json'):
+            mimetype = 'application/json'
+        elif filename.endswith('.csv'):
+            mimetype = 'text/csv'
+        elif filename.endswith('.md'):
+            mimetype = 'text/markdown'
+        else:
+            mimetype = 'text/plain'
+        
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=filename,
+            mimetype=mimetype
+        )
+        
+    except Exception as e:
+        return jsonify({'error': f'Errore nel download: {str(e)}'}), 500
 
 if __name__ == '__main__':
     # Controlla se Weaviate è disponibile

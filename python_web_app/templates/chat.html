@@ -199,6 +199,29 @@
     border: 1px solid #f5c6cb;
 }
 
+/* Stili per i pulsanti di download */
+.download-buttons {
+    border-top: 1px solid rgba(0,0,0,0.1);
+    padding-top: 10px;
+    margin-top: 10px;
+}
+
+.download-buttons .btn {
+    margin-right: 5px;
+    margin-bottom: 5px;
+    font-size: 0.8rem;
+    padding: 0.25rem 0.5rem;
+}
+
+.download-buttons .btn i {
+    margin-right: 3px;
+}
+
+.download-buttons .btn:hover {
+    transform: translateY(-1px);
+    transition: transform 0.2s ease;
+}
+
 pre {
     background-color: #f8f9fa;
     border: 1px solid #e9ecef;
@@ -323,7 +346,7 @@ document.addEventListener('DOMContentLoaded', function() {
             hideLoading(loadingElement);
             
             if (data.success) {
-                addAssistantMessage(data.answer, data.question_type, data.processing_time);
+                addAssistantMessage(data.answer, data.question_type, data.processing_time, data);
             } else {
                 // Se l'errore è dovuto alla mancanza di collezione, suggerisci selezione
                 if (data.error && data.error.includes('selezionare una collezione')) {
@@ -357,7 +380,7 @@ document.addEventListener('DOMContentLoaded', function() {
         scrollToBottom();
     }
     
-    function addAssistantMessage(text, questionType = null, processingTime = null) {
+    function addAssistantMessage(text, questionType = null, processingTime = null, fullResponse = null) {
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message-bubble assistant-message';
         
@@ -372,11 +395,35 @@ document.addEventListener('DOMContentLoaded', function() {
             timeInfo = ` • ${processingTime}ms`;
         }
         
+        // Pulsanti di download (solo se non è un messaggio di errore)
+        let downloadButtons = '';
+        if (fullResponse && !text.includes('❌') && !text.includes('Errore')) {
+            downloadButtons = `
+                <div class="download-buttons mt-2">
+                    <div class="btn-group" role="group" aria-label="Download options">
+                        <button type="button" class="btn btn-outline-primary btn-sm" onclick="downloadResponse('txt', ${JSON.stringify(fullResponse).replace(/"/g, '&quot;')})">
+                            <i class="fas fa-file-text"></i> TXT
+                        </button>
+                        <button type="button" class="btn btn-outline-success btn-sm" onclick="downloadResponse('md', ${JSON.stringify(fullResponse).replace(/"/g, '&quot;')})">
+                            <i class="fab fa-markdown"></i> MD
+                        </button>
+                        <button type="button" class="btn btn-outline-info btn-sm" onclick="downloadResponse('json', ${JSON.stringify(fullResponse).replace(/"/g, '&quot;')})">
+                            <i class="fas fa-code"></i> JSON
+                        </button>
+                        <button type="button" class="btn btn-outline-warning btn-sm" onclick="downloadResponse('csv', ${JSON.stringify(fullResponse).replace(/"/g, '&quot;')})">
+                            <i class="fas fa-table"></i> CSV
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+        
         messageDiv.innerHTML = `
             <div class="message-info assistant-info">
                 Gemini${badge}${timeInfo}
             </div>
             <div class="message-content">${formatResponse(text)}</div>
+            ${downloadButtons}
         `;
         
         chatMessages.appendChild(messageDiv);
@@ -457,6 +504,75 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Formatta il testo normale
         return escapeHtml(text).replace(/\n/g, '<br>');
+    }
+
+    // Funzione per scaricare la risposta
+    function downloadResponse(format, responseData) {
+        const button = event.target.closest('button');
+        const originalContent = button.innerHTML;
+        
+        // Mostra loading
+        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        button.disabled = true;
+        
+        fetch('/download/response', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                response_data: responseData,
+                format: format
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Scarica il file
+                const link = document.createElement('a');
+                link.href = data.download_url;
+                link.download = data.filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                // Mostra messaggio di successo
+                showToast(`File ${data.filename} scaricato con successo!`, 'success');
+            } else {
+                showToast(`Errore nel download: ${data.error}`, 'error');
+            }
+        })
+        .catch(error => {
+            console.error('Errore download:', error);
+            showToast('Errore durante il download', 'error');
+        })
+        .finally(() => {
+            // Ripristina il pulsante
+            button.innerHTML = originalContent;
+            button.disabled = false;
+        });
+    }
+
+    // Funzione per mostrare toast notifications
+    function showToast(message, type = 'info') {
+        // Crea il toast
+        const toast = document.createElement('div');
+        toast.className = `alert alert-${type === 'success' ? 'success' : 'danger'} alert-dismissible fade show position-fixed`;
+        toast.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+        
+        toast.innerHTML = `
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        document.body.appendChild(toast);
+        
+        // Rimuovi automaticamente dopo 5 secondi
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.remove();
+            }
+        }, 5000);
     }
 });
 </script>
